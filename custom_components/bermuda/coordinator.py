@@ -664,15 +664,34 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
             self.update_metadevices()
 
-            # Calculate per-device data
+            # Calculate per-device data, refresh area selection and trigger creation of
+            # any new entities, all in a single pass over self.devices.
             #
-            # Scanner entries have been loaded up with latest data, now we can
-            # process data for all devices over all scanners.
-            for device in self.devices.values():
+            # These three steps used to be three separate full passes over self.devices
+            # (calculate_data() for every device, then _refresh_area_by_min_distance()
+            # for create_sensor devices, then the entity-creation check for create_sensor
+            # devices again). None of the three reads another device's state - area
+            # selection and entity-creation only ever look at the device they're
+            # currently considering (plus its own adverts/scanners) - so they can safely
+            # run together per-device instead of as separate whole-dict walks. This
+            # matters because this whole block re-runs every UPDATE_INTERVAL (~1s) for
+            # every tracked device, which can number in the hundreds.
+            for address, device in self.devices.items():
                 # Recalculate smoothed distances, last_seen etc
                 device.calculate_data()
 
-            self._refresh_areas_by_min_distance()
+                if device.create_sensor:
+                    self._refresh_area_by_min_distance(device)
+
+                    # Trigger creation of any new entities.
+                    # The device is fully updated now (and any new scanners and beacons
+                    # seen have been added), so let's ensure any devices that we create
+                    # sensors for are set up ready to go.
+                    if not device.create_all_done:
+                        _LOGGER.debug("Firing device_new for %s (%s)", device.name, address)
+                        # Note that the below should be OK thread-wise, debugger indicates this is being
+                        # called by _run in events.py, so pretty sure we are "in the event loop".
+                        async_dispatcher_send(self.hass, SIGNAL_DEVICE_NEW, address)
 
             # We might need to freshen deliberately on first start if no new scanners
             # were discovered in the first scan update. This is likely if nothing has changed
@@ -694,22 +713,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             # and sort it out when moving to device-based restoration (ie using DR/ER
             # to decide what devices to track and deprecating CONF_DEVICES)
             #
+            # Note: a device seeded here (freshly created, so create_sensor is still
+            # False since only calculate_data() sets it) will not appear as a "new"
+            # entity until *next* update cycle - it wasn't in self.devices for the loop
+            # above, and the same was true of this in the previous (three-pass) version
+            # of this method, since calculate_data() had already finished running by
+            # the time the old code seeded new devices.
             # if not self._seed_configured_devices_done:
             for _source_address in self.options.get(CONF_DEVICES, []):
                 self._get_or_create_device(_source_address)
             self._seed_configured_devices_done = True
-
-            # Trigger creation of any new entities
-            #
-            # The devices are all updated now (and any new scanners and beacons seen have been added),
-            # so let's ensure any devices that we create sensors for are set up ready to go.
-            for address, device in self.devices.items():
-                if device.create_sensor:
-                    if not device.create_all_done:
-                        _LOGGER.debug("Firing device_new for %s (%s)", device.name, address)
-                        # Note that the below should be OK thread-wise, debugger indicates this is being
-                        # called by _run in events.py, so pretty sure we are "in the event loop".
-                        async_dispatcher_send(self.hass, SIGNAL_DEVICE_NEW, address)
 
             # Device Pruning (only runs periodically)
             self.prune_devices()
@@ -1241,16 +1254,6 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         if hasattr(areas, "name"):
             return getattr(areas, "name", "invalid_area")
         return None
-
-    def _refresh_areas_by_min_distance(self):
-        """Set area for ALL devices based on closest beacon."""
-        for device in self.devices.values():
-            if (
-                # device.is_scanner is not True  # exclude scanners.
-                device.create_sensor  # include any devices we are tracking
-                # or device.metadevice_type in METADEVICE_SOURCETYPES  # and any source devices for PBLE, ibeacon etc
-            ):
-                self._refresh_area_by_min_distance(device)
 
     @dataclass
     class AreaTests:
