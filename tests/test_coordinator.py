@@ -3,9 +3,10 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from unittest.mock import MagicMock
+from unittest.mock import MagicMock, patch
 
 from custom_components.bermuda.bermuda_device import BermudaDevice
+from custom_components.bermuda.const import SIGNAL_DEVICE_NEW
 from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
 
 
@@ -131,3 +132,58 @@ def test_update_metadevices_does_not_overwrite_existing_name_fields():
     assert metadevice.manufacturer == "Existing Manufacturer"
     # beacon_major is "VERY interesting" - always takes the source's value.
     assert metadevice.beacon_major == "9"
+
+
+def test_async_update_data_internal_single_pass_per_device():
+    """calculate_data(), area refresh and entity-creation must all happen for
+    every device in a single pass over self.devices, with area refresh and
+    entity-creation firing only for create_sensor devices.
+
+    Regression test for merging what used to be three separate full passes
+    over self.devices (calculate_data for every device, then
+    _refresh_area_by_min_distance for create_sensor devices, then the
+    entity-creation check for create_sensor devices again) into one. None of
+    the three reads another device's state, so they can run together
+    per-device; this asserts that behaviour is preserved after the merge.
+    """
+    tracked = MagicMock()
+    tracked.create_sensor = True
+    tracked.create_all_done = False
+    tracked.name = "Tracked Device"
+
+    untracked = MagicMock()
+    untracked.create_sensor = False
+    untracked.create_all_done = False
+    untracked.name = "Untracked Device"
+
+    coordinator = SimpleNamespace(
+        devices={"tracked": tracked, "untracked": untracked},
+        options={},
+        hass=MagicMock(),
+        update_in_progress=False,
+        _waitingfor_load_manufacturer_ids=False,
+        stamp_last_update_started=0,
+        stamp_last_update=0,
+        last_update_success=False,
+        _async_gather_advert_data=lambda: True,
+        update_metadevices=lambda: None,
+        _get_or_create_device=lambda addr: None,
+        _seed_configured_devices_done=False,
+        prune_devices=lambda: None,
+        _refresh_area_by_min_distance=MagicMock(),
+    )
+
+    with patch("custom_components.bermuda.coordinator.async_dispatcher_send") as mock_dispatch:
+        BermudaDataUpdateCoordinator._async_update_data_internal(coordinator)
+
+    # Every device gets its data recalculated, regardless of create_sensor.
+    tracked.calculate_data.assert_called_once()
+    untracked.calculate_data.assert_called_once()
+
+    # Only the create_sensor device gets an area refresh...
+    coordinator._refresh_area_by_min_distance.assert_called_once_with(tracked)
+
+    # ...and only the create_sensor device fires the new-entity signal.
+    mock_dispatch.assert_called_once_with(coordinator.hass, SIGNAL_DEVICE_NEW, "tracked")
+
+    assert coordinator.last_update_success is True
