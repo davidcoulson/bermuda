@@ -328,6 +328,9 @@ def test_alignment_persists_without_touching_the_config_entry():
         hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=_explode)),
     )
     coordinator._findmy_alignment_data = lambda: BermudaDataUpdateCoordinator._findmy_alignment_data(coordinator)  # noqa: SLF001
+    coordinator.async_save_findmy_alignment = lambda: BermudaDataUpdateCoordinator.async_save_findmy_alignment(
+        coordinator
+    )
 
     asyncio.run(BermudaDataUpdateCoordinator.async_flush_findmy_alignment(coordinator))
 
@@ -377,14 +380,24 @@ async def test_removing_an_accessory_triggers_an_alignment_save():
 
     from custom_components.bermuda.config_flow import BermudaOptionsFlowHandler
     from custom_components.bermuda.const import DOMAIN
+    from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
 
     manager = BermudaFindMyManager()
     acc = manager.add_accessory(_accessory())
 
     saves: list[bool] = []
+
+    async def _save() -> None:
+        saves.append(True)
+
+    # Guard the name itself: a hand-rolled stub happily answers to a method the
+    # real coordinator no longer has, which is how a rename slipped through once
+    # and made every removal raise AttributeError in the options flow.
+    assert hasattr(BermudaDataUpdateCoordinator, "async_save_findmy_alignment")
+
     coordinator = SimpleNamespace(
         findmy_manager=manager,
-        async_save_findmy_alignment=lambda: saves.append(True),
+        async_save_findmy_alignment=_save,
     )
 
     entry = MockConfigEntry(domain=DOMAIN, data={}, options={})

@@ -1218,6 +1218,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             for acc in self.findmy_manager.accessories.values()
         }
 
+    async def async_save_findmy_alignment(self) -> None:
+        """
+        Write the alignment Store now, whatever the accessory list looks like.
+
+        Unlike the flush below this saves an empty payload too, which is exactly
+        what the removal path needs: dropping the last accessory must clear its
+        index out of .storage rather than leave it there forever.
+        """
+        await self._findmy_store.async_save(self._findmy_alignment_data())
+
     async def async_flush_findmy_alignment(self) -> None:
         """
         Write alignment immediately, for unload and reload.
@@ -1226,10 +1236,13 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         stop. On an entry unload or reload there may be nothing queued at all -
         the throttle means a dirty alignment can be waiting without a pending
         write - so anything learned since the last queued save would be lost.
+
+        Nothing to flush when no accessory is configured, and writing then would
+        create the Store for an install that never uses FindMy.
         """
         if not self.findmy_manager.accessories:
             return
-        await self._findmy_store.async_save(self._findmy_alignment_data())
+        await self.async_save_findmy_alignment()
 
     def register_ibeacon_source(self, source_device: BermudaDevice):
         """
