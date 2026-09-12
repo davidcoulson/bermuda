@@ -19,7 +19,7 @@ DOMAIN_DATA = f"{DOMAIN}_data"
 # that the component has been checked out from git, not pulled from
 # an officially built release. HACS will use the git tag (or the zip file,
 # either way it works).
-VERSION = "0.8.7-fork-testing.5"
+VERSION = "0.8.7-fork-testing.6"
 
 ATTRIBUTION = "Data provided by http://jsonplaceholder.typicode.com/"
 ISSUE_URL = "https://github.com/agittins/bermuda/issues"
@@ -192,6 +192,15 @@ CONF_SMOOTHING_SAMPLES, DEFAULT_SMOOTHING_SAMPLES = "smoothing_samples", 20
 DOCS[CONF_SMOOTHING_SAMPLES] = (
     "How many samples to average distance smoothing. Bigger numbers"
     " make for slower distance increases. 10 or 20 seems good."
+)
+
+CONF_CREATE_SCANNER_ENTITIES, DEFAULT_CREATE_SCANNER_ENTITIES = "create_scanner_entities", True
+DOCS[CONF_CREATE_SCANNER_ENTITIES] = (
+    "Create a per-scanner distance sensor for every tracked device x scanner pair. "
+    "This is one entity registry entry per pair even when disabled, so it grows as "
+    "O(devices x scanners) and can reach thousands on a large install. Turn off if "
+    "nothing reads these entities - other integrations can read the same data via "
+    "Bermuda's api.async_get_advert_snapshot() without any entities existing at all."
 )
 
 # Defaults

@@ -25,6 +25,7 @@ from .const import (
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
     BDADDR_TYPE_RANDOM_RESOLVABLE,
     CONF_ATTENUATION,
+    CONF_CREATE_SCANNER_ENTITIES,
     CONF_DEVICES,
     CONF_DEVTRACK_TIMEOUT,
     CONF_MAX_RADIUS,
@@ -37,6 +38,7 @@ from .const import (
     CONF_SMOOTHING_SAMPLES,
     CONF_UPDATE_INTERVAL,
     DEFAULT_ATTENUATION,
+    DEFAULT_CREATE_SCANNER_ENTITIES,
     DEFAULT_DEVTRACK_TIMEOUT,
     DEFAULT_MAX_RADIUS,
     DEFAULT_MAX_VELOCITY,
@@ -229,6 +231,10 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 CONF_REF_POWER,
                 default=self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER),
             ): vol.Coerce(float),
+            vol.Required(
+                CONF_CREATE_SCANNER_ENTITIES,
+                default=self.options.get(CONF_CREATE_SCANNER_ENTITIES, DEFAULT_CREATE_SCANNER_ENTITIES),
+            ): bool,
         }
 
         return self.async_show_form(step_id="globalopts", data_schema=vol.Schema(data_schema))

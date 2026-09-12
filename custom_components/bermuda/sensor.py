@@ -19,6 +19,8 @@ from .const import (
     _LOGGER,
     ADDR_TYPE_IBEACON,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
+    CONF_CREATE_SCANNER_ENTITIES,
+    DEFAULT_CREATE_SCANNER_ENTITIES,
     SIGNAL_DEVICE_NEW,
     SIGNAL_SCANNERS_CHANGED,
 )
@@ -98,32 +100,57 @@ async def async_setup_entry(
         # go over time. So we need to maintain our matrix of which ones we have already
         # spun-up so we don't duplicate any.
 
-        for scanner in coordinator.get_scanners:
-            if (
-                scanner.is_remote_scanner is None  # usb/HCI scanner's are fine.
-                or (scanner.is_remote_scanner and scanner.address_wifi_mac is None)
-            ):
-                # This scanner doesn't have a wifi mac yet, bail out
-                # until they are all filled out.
-                return
+        # A scanner whose wifi mac hasn't resolved yet is skipped rather than
+        # blocking everyone: this used to `return` here, which meant a SINGLE
+        # such scanner anywhere in the whole system silently froze entity
+        # creation for every device against every OTHER scanner too, forever
+        # (until that one scanner resolved, which some device types - a kiosk
+        # or panel acting as a BLE scanner rather than an ESPHome/Shelly proxy
+        # - never do). Measured in production: two such scanners had frozen
+        # backfill for the entire install, capping every tracked device's
+        # registered scanners at whatever existed the moment those two
+        # appeared - worst for whichever device was tracked most recently.
+        # Safe to skip just the unresolved one: unique_id already falls back
+        # to `.address` when `address_wifi_mac` is None (see
+        # BermudaSensorScannerRange.unique_id below), so nothing here actually
+        # depended on waiting.
+        unresolved_scanners = {
+            scanner.address
+            for scanner in coordinator.get_scanners
+            if scanner.is_remote_scanner is None  # usb/HCI scanner's are fine.
+            or (scanner.is_remote_scanner and scanner.address_wifi_mac is None)
+        }
+
+        # These are the O(devices x scanners) entities: one registry row per pair,
+        # created even while disabled. On a busy install that is thousands of rows
+        # that nothing reads once a consumer has moved to the direct API
+        # (custom_components.bermuda.api.async_get_advert_snapshot), which reflects
+        # every advert in memory regardless of whether this loop ever runs. Gate
+        # their creation so that data is still available, but the registry does not
+        # grow, for anyone who has switched to the direct API.
+        create_entities = entry.options.get(CONF_CREATE_SCANNER_ENTITIES, DEFAULT_CREATE_SCANNER_ENTITIES)
 
         entities = []
         for scanner in coordinator.scanner_list:
+            if scanner in unresolved_scanners:
+                continue
             for address in created_devices:
                 if address not in created_scanners.get(scanner, []):
-                    _LOGGER.debug(
-                        "Creating Scanner %s entities for %s",
-                        scanner,
-                        address,
-                    )
-                    entities.append(BermudaSensorScannerRange(coordinator, entry, address, scanner))
-                    entities.append(BermudaSensorScannerRangeRaw(coordinator, entry, address, scanner))
                     created_entry = created_scanners.setdefault(scanner, [])
                     created_entry.append(address)
+                    if create_entities:
+                        _LOGGER.debug(
+                            "Creating Scanner %s entities for %s",
+                            scanner,
+                            address,
+                        )
+                        entities.append(BermudaSensorScannerRange(coordinator, entry, address, scanner))
+                        entities.append(BermudaSensorScannerRangeRaw(coordinator, entry, address, scanner))
         # _LOGGER.debug("Sensor received new_device signal for %s", address)
         # We set update before add to False because we are being
         # call(back(ed)) from the update, so causing it to call another would be... bad.
-        async_add_entities(entities, False)
+        if entities:
+            async_add_entities(entities, False)
 
     @callback
     def scanners_changed() -> None:
