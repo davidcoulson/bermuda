@@ -134,6 +134,18 @@ def async_get_advert_snapshot(
     nowstamp = monotonic_time_coarse()
     wanted = {addr.lower() for addr in addresses} if addresses is not None else None
 
+    # Many adverts across many devices share the same handful of physical
+    # scanners, so slugify(scanner_name) is called far more often than there
+    # are distinct names. Memoize per-call (not globally: a scanner rename
+    # mid-run should be picked up by the next snapshot, not held forever).
+    slug_cache: dict[str, str] = {}
+
+    def _cached_slug(name: str) -> str:
+        slug = slug_cache.get(name)
+        if slug is None:
+            slug = slug_cache[name] = slugify(name)
+        return slug
+
     devices: dict[str, Any] = {}
     for address, device in coordinator.devices.items():
         if wanted is not None and address.lower() not in wanted:
@@ -161,7 +173,7 @@ def async_get_advert_snapshot(
                 # from entity scraping should map their stored slug to a scanner
                 # address ONCE via the entity registry - disabled entities are
                 # still registered - and then key off the address below.
-                "slug": slugify(scanner_name),
+                "slug": _cached_slug(scanner_name),
                 "address": advert.scanner_address,
                 # Bermuda builds its per-scanner entity unique_ids as
                 # f"{device.unique_id}_{scanner.address_wifi_mac or scanner.address}_range",
@@ -182,7 +194,7 @@ def async_get_advert_snapshot(
 
         devices[address] = {
             "name": device.name,
-            "slug": slugify(device.name),
+            "slug": _cached_slug(device.name),
             "unique_id": getattr(device, "unique_id", None),
             # True for devices the user has configured Bermuda to track. This
             # is exactly the set Bermuda creates sensors (including the
