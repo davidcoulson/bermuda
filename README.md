@@ -105,6 +105,39 @@ the wrong tag. Bindings persist across restarts. Diagnostics also carry a raw
 capture of every Tile address heard (address class, RSSI and payload history
 per scanner) for tuning the heuristic against real data.
 
+**Identity over GATT.** Newer "Private ID" Tiles, the ones that rotate, expose
+their Tile ID through a characteristic that is readable right after
+connecting, before any authentication (as
+[node-tile](https://github.com/lesleyxyz/node-tile) does). When a proxy in
+active mode can reach the tag, Bermuda reads that ID once from the bound
+address and then resolves a rotation by reading each candidate's ID: a match
+binds outright, a different ID rules the candidate out, and a Tile with no ID
+characteristic cannot be a successor because it does not rotate. Probes run
+one at a time, hold the connection only for the read, remember every answer
+for the life of the address, and retry a failed connection after five
+minutes. The RSSI heuristic remains the fallback when no proxy can connect.
+Diagnostics list the learned IDs and probe counts.
+
+## Managing devices without the options flow (this fork)
+
+The options flow is one way to pick devices; these services (and the matching
+functions in `api.py`, which Sextant uses) are the other:
+
+- `bermuda.list_device_candidates` — everything Bermuda hears that could be
+  tracked but is not, with the `config_value` to use below (an address, or a
+  Tile metadevice id such as `TILE_24D1093B0211`).
+- `bermuda.track_devices` with `add` / `remove` lists.
+- `bermuda.add_findmy_accessory` (exported key JSON, optional name) and
+  `bermuda.remove_findmy_accessory` (its `findmy_` address).
+- `bermuda.set_options` for the global options (`ref_power`, `attenuation`,
+  `max_area_radius`, `max_velocity`, `devtracker_nothome_timeout`,
+  `update_interval`, `smoothing_samples`, `create_scanner_entities`,
+  `track_categories`, `exclude_devices`).
+
+Each writes the config entry exactly as the flow would, so Bermuda reloads to
+apply it. The scanner status table moved out of the options menu onto its own
+"Scanner Status" page.
+
 ## Apple FindMy accessories (this fork)
 
 Merged from [Megarushing/bermuda](https://github.com/Megarushing/bermuda):

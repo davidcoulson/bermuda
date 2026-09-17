@@ -81,6 +81,13 @@
         "data_description": {
           "scanner_info": "Deixe a zero para aceitar o padrão global, ou insira um número para ajustar o RSSI reportado por esse scanner. Ajuste até que a distância estimada corresponda à distância real."
         }
+      },
+      "scanners": {
+        "title": "Scanner status",
+        "description": "{scanner_table}",
+        "menu_options": {
+          "init": "Back"
+        }
       }
     }
   },

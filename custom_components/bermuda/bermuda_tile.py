@@ -32,6 +32,8 @@ not orphan the tag.
 
 from __future__ import annotations
 
+import asyncio
+
 from typing import TYPE_CHECKING, Any
 
 from bluetooth_data_tools import monotonic_time_coarse
@@ -58,6 +60,45 @@ from .const import (
 if TYPE_CHECKING:
     from .bermuda_device import BermudaDevice
     from .coordinator import BermudaDataUpdateCoordinator
+
+
+# --- phase 3: identity over GATT ----------------------------------------------
+# node-tile (lesleyxyz) reads this characteristic straight after connecting,
+# before any authentication: newer "Private ID" Tiles - the ones that rotate
+# their address - expose their Tile ID here. Older Tiles have no such
+# characteristic and never rotate, so their MAC stays their identity.
+TILE_ID_CHAR_UUID = "9d410007-35d6-f4dd-ba60-e7bd8dc491c0"
+TILE_PROBE_TIMEOUT = 25.0  # seconds for one connect + read
+TILE_PROBE_RETRY_SECS = 300.0  # a transient failure is retried after this
+TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
+
+
+class TileProbeUnavailable(Exception):
+    """No connectable scanner currently hears the address."""
+
+
+async def async_read_tile_uid(hass, address: str) -> str | None:
+    """Connect to a Tile through Home Assistant's bluetooth stack and read its Tile ID.
+
+    Returns the ID as hex, or None when the Tile has no Tile ID characteristic
+    (a non-rotating model). Raises TileProbeUnavailable when no connectable
+    path exists right now (no active proxy hears it), and whatever bleak
+    raises when the connection or read fails.
+    """
+    from homeassistant.components import bluetooth  # noqa: PLC0415
+    from bleak_retry_connector import BleakClientWithServiceCache, establish_connection  # noqa: PLC0415
+
+    ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), connectable=True)
+    if ble_device is None:
+        raise TileProbeUnavailable(f"no connectable scanner hears {address}")
+    client = await establish_connection(BleakClientWithServiceCache, ble_device, f"Tile {address}", max_attempts=2)
+    try:
+        char = client.services.get_characteristic(TILE_ID_CHAR_UUID)
+        if char is None:
+            return None
+        return bytes(await client.read_gatt_char(char)).hex()
+    finally:
+        await client.disconnect()
 
 
 def tile_metadevice_id(address: str) -> str:
@@ -123,7 +164,21 @@ class BermudaTileManager:
         self.last_ambiguity: dict[str, Any] | None = None
         self.last_handover: dict[str, Any] | None = None
         hass = getattr(coordinator, "hass", None)
+        self._hass = hass
         self._store: Store | None = Store(hass, TILE_STORAGE_VERSION, TILE_STORAGE_KEY) if hass is not None else None
+        # Phase 3: tile_id -> Tile ID read over GATT ("" = probed, the Tile has
+        # no ID characteristic and does not rotate). Persisted with the bindings.
+        self.uids: dict[str, str] = {}
+        # address -> {"uid": str | None, "error": str | None, "stamp": float}
+        # for every address probed; None uid with an error is a failed probe.
+        self._probes: dict[str, dict[str, Any]] = {}
+        self._pending: set[str] = set()
+        self._queue: list[tuple[str, str | None]] = []
+        self._worker: asyncio.Task | None = None
+        self._probe_fn = async_read_tile_uid
+        self.probes = 0
+        self.probe_failures = 0
+        self.last_probe: dict[str, Any] | None = None
 
     # --- persistence ---------------------------------------------------------
 
@@ -142,12 +197,16 @@ class BermudaTileManager:
             }
         self.handovers = int(data.get("handovers") or 0)
         self.ambiguous_handovers = int(data.get("ambiguous_handovers") or 0)
+        uids = data.get("uids")
+        if isinstance(uids, dict):
+            self.uids = {str(k): str(v) for k, v in uids.items()}
 
     def _data(self) -> dict[str, Any]:
         return {
             "bindings": self.bindings,
             "handovers": self.handovers,
             "ambiguous_handovers": self.ambiguous_handovers,
+            "uids": self.uids,
         }
 
     def _schedule_save(self) -> None:
@@ -178,6 +237,11 @@ class BermudaTileManager:
                 coordinator.metadevices[metadevice.address] = metadevice
             if tile_id in configured:
                 metadevice.create_sensor = True
+            # Learn this Tile's ID from whichever address it is bound to now,
+            # once; a rotation is then resolved by reading the successor's.
+            sources = self.bindings.get(tile_id) or []
+            if sources and tile_id not in self.uids:
+                self._request_probe(sources[0], learn_for=tile_id)
             sources = self.bindings.setdefault(tile_id, [])
             if not sources:
                 seed = mac_from_tile_id(tile_id)
@@ -226,6 +290,37 @@ class BermudaTileManager:
             and window_start <= (device.first_seen or 0) <= window_end
             and nowstamp - device.last_seen <= TILE_HANDOVER_WINDOW
         ]
+        # Phase 3: when this Tile's ID is known and probing is possible, ask
+        # each candidate who it is. A match binds outright; a mismatch (or a
+        # Tile with no ID characteristic - it does not rotate, so it cannot be
+        # a successor) drops out of the heuristic below; while probes are
+        # still pending or retryable nothing is decided yet.
+        uid = self.uids.get(tile_id)
+        if uid and self._can_probe():
+            ordered = sorted(candidates, key=lambda d: -(d.last_seen or 0))
+            for candidate in ordered:
+                result = self._probes.get(candidate.address)
+                if result is not None and result.get("uid") == uid:
+                    self.bind(tile_id, candidate.address, reason="tile id")
+                    return True
+            undecided = False
+            for candidate in ordered:
+                self._request_probe(candidate.address)
+                result = self._probes.get(candidate.address)
+                if candidate.address in self._pending or result is None:
+                    undecided = True
+                elif result.get("error") and result.get("error") != "unavailable":
+                    undecided = True  # transient failure: retried after TILE_PROBE_RETRY_SECS
+            if undecided:
+                return False
+            # Every candidate answered, none is ours (or none could be
+            # reached): only Tiles nobody could read stay in the heuristic.
+            candidates = [
+                c for c in candidates
+                if (r := self._probes.get(c.address)) is None or r.get("error") == "unavailable"
+            ]
+        elif self._can_probe() and tile_id not in self.uids:
+            return False  # still learning the bound address's id: wait for it
         scored = []
         for candidate in candidates:
             score = handover_score(bound, candidate)
@@ -256,10 +351,77 @@ class BermudaTileManager:
                 scored[1][0],
             )
             return True  # counters changed
-        self.bind(tile_id, best.address, score=best_score, scanners=best_n)
+        self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern")
         return True
 
-    def bind(self, tile_id: str, address: str, *, score: float | None = None, scanners: int | None = None) -> None:
+    # --- phase 3: probing --------------------------------------------------------
+
+    def _can_probe(self) -> bool:
+        return self._hass is not None
+
+    def _request_probe(self, address: str, learn_for: str | None = None) -> None:
+        """Queue a Tile ID read for ``address`` unless one is pending or already answered."""
+        if not self._can_probe():
+            return
+        address = address.lower()
+        if address in self._pending or any(a == address for a, _ in self._queue):
+            return
+        result = self._probes.get(address)
+        if result is not None:
+            if result.get("error") is None:
+                return  # definitive answer
+            if monotonic_time_coarse() - result["stamp"] < TILE_PROBE_RETRY_SECS:
+                return
+        self._pending.add(address)
+        self._queue.append((address, learn_for))
+        if self._worker is None or self._worker.done():
+            self._worker = self._hass.async_create_task(self._run_probes())
+
+    async def _run_probes(self) -> None:
+        """One probe at a time: a Tile holds one connection, and so does a proxy slot."""
+        while self._queue:
+            address, learn_for = self._queue.pop(0)
+            try:
+                uid = await asyncio.wait_for(self._probe_fn(self._hass, address), TILE_PROBE_TIMEOUT)
+            except TileProbeUnavailable as err:
+                self._record_probe(address, None, "unavailable", str(err))
+            except Exception as err:  # noqa: BLE001 - bleak raises a zoo of exceptions
+                self._record_probe(address, None, "failed", f"{type(err).__name__}: {err}")
+            else:
+                self._record_probe(address, uid, None, None)
+                self._on_probe_result(address, uid, learn_for)
+            finally:
+                self._pending.discard(address)
+
+    def _record_probe(self, address: str, uid: str | None, error: str | None, detail: str | None) -> None:
+        stamp = monotonic_time_coarse()
+        self._probes[address] = {"uid": uid, "error": error, "stamp": stamp}
+        self.probes += 1
+        if error:
+            self.probe_failures += 1
+            _LOGGER.debug("Tile probe of %s %s: %s", address, error, detail)
+        self.last_probe = {"address": address, "uid": uid, "error": error, "detail": detail, "stamp": stamp}
+        # Forget answers for addresses that rotated away long ago.
+        for old in [a for a, r in self._probes.items() if stamp - r["stamp"] > TILE_PROBE_RESULT_TTL]:
+            del self._probes[old]
+
+    def _on_probe_result(self, address: str, uid: str | None, learn_for: str | None) -> None:
+        if learn_for is not None:
+            self.uids[learn_for] = uid or ""
+            _LOGGER.info(
+                "Tile %s %s", learn_for,
+                f"identified: Tile ID {uid}" if uid else "has no Tile ID characteristic (it will not rotate)",
+            )
+            self._schedule_save()
+        if not uid:
+            return
+        # Any configured Tile with this ID that is not already bound here.
+        for tile_id, known in self.uids.items():
+            if known == uid and (self.bindings.get(tile_id) or [None])[0] != address:
+                self.bind(tile_id, address, reason="tile id")
+
+    def bind(self, tile_id: str, address: str, *, score: float | None = None, scanners: int | None = None,
+             reason: str | None = None) -> None:
         """Make ``address`` the current source of Tile ``tile_id``.
 
         Public on purpose: a future integration that knows a tag's address for
@@ -283,11 +445,12 @@ class BermudaTileManager:
         source.is_tile = True
         self.handovers += 1
         self.last_handover = {"tile": tile_id, "to": address, "score": score, "scanners": scanners,
-                              "stamp": monotonic_time_coarse()}
+                              "reason": reason, "stamp": monotonic_time_coarse()}
         _LOGGER.info(
-            "Tile %s re-bound to %s%s",
+            "Tile %s re-bound to %s%s%s",
             metadevice.name,
             address,
+            f" by {reason}" if reason else "",
             f" (mean RSSI delta {score:.1f} dB over {scanners} scanners)" if score is not None else "",
         )
         self._schedule_save()
@@ -301,6 +464,11 @@ class BermudaTileManager:
             "ambiguous_handovers": self.ambiguous_handovers,
             "last_handover": self.last_handover,
             "last_ambiguity": self.last_ambiguity,
+            "uids": self.uids,
+            "probes": self.probes,
+            "probe_failures": self.probe_failures,
+            "probes_pending": sorted(self._pending),
+            "last_probe": self.last_probe,
         }
 
 

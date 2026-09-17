@@ -174,10 +174,26 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
         else:
             messages["status"] = "You have at least some active devices, this is good."
 
-        # Build a markdown table of scanners so the user can see what's up.
-        scanner_table = "\n\nStatus of scanners:\n\n|Scanner|Address|Last advertisement|\n|---|---|---:|\n"
+        # return await self.async_step_globalopts()
+        return self.async_show_menu(
+            step_id="init",
+            menu_options={
+                "globalopts": "Global Options",
+                "selectdevices": "Select Devices",
+                "findmy": "FindMy Accessories (AirTags)",
+                "calibration1_global": "Calibration 1: Global",
+                "calibration2_scanners": "Calibration 2: Scanner RSSI Offsets",
+                "scanners": "Scanner Status",
+            },
+            description_placeholders=messages,
+        )
+
+    async def async_step_scanners(self, user_input=None):  # pylint: disable=unused-argument
+        """Show the per-scanner status table on its own page (it is long)."""
+        coordinator = self.config_entry.runtime_data.coordinator
+        scanner_table = "|Scanner|Address|Last advertisement|\n|---|---|---:|\n"
         # Use emoji to indicate if age is "good"
-        for scanner in self.coordinator.get_active_scanner_summary():
+        for scanner in coordinator.get_active_scanner_summary():
             age = int(scanner.get("last_stamp_age", 999))
             if age < 2:
                 status = '<ha-icon icon="mdi:check-circle-outline"></ha-icon>'
@@ -191,19 +207,10 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 f"| {scanner.get('name', 'NAME_ERR')}| [{shortmac}]"
                 f"| {status} {(scanner.get('last_stamp_age', DISTANCE_INFINITE)):.2f} seconds ago.|\n"
             )
-        messages["status"] += scanner_table
-
-        # return await self.async_step_globalopts()
         return self.async_show_menu(
-            step_id="init",
-            menu_options={
-                "globalopts": "Global Options",
-                "selectdevices": "Select Devices",
-                "findmy": "FindMy Accessories (AirTags)",
-                "calibration1_global": "Calibration 1: Global",
-                "calibration2_scanners": "Calibration 2: Scanner RSSI Offsets",
-            },
-            description_placeholders=messages,
+            step_id="scanners",
+            menu_options={"init": "Back"},
+            description_placeholders={"scanner_table": scanner_table},
         )
 
     async def async_step_globalopts(self, user_input=None):

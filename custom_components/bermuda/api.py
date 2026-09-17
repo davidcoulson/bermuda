@@ -33,7 +33,18 @@ from bluetooth_data_tools import monotonic_time_coarse
 from homeassistant.core import callback
 from homeassistant.util import slugify
 
-from .const import CONF_ATTENUATION, CONF_REF_POWER, CONF_RSSI_OFFSETS, DOMAIN
+from .const import (
+    ADDR_TYPE_FINDMY,
+    ADDR_TYPE_IBEACON,
+    ADDR_TYPE_PRIVATE_BLE_DEVICE,
+    ADDR_TYPE_TILE,
+    CONF_ATTENUATION,
+    CONF_DEVICES,
+    CONF_REF_POWER,
+    CONF_RSSI_OFFSETS,
+    CONFDATA_FINDMY,
+    DOMAIN,
+)
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -60,7 +71,15 @@ SNAPSHOT_VERSION = 1
 #                    write Bermuda's per-scanner rssi offsets, applied live and
 #                    persisted without reloading the entry
 SNAPSHOT_FEATURES = frozenset(
-    {"tracked_only", "tracked_devices", "scanners", "rssi_history", "rssi_offsets", "scanner_ranging"}
+    {
+        "tracked_only",
+        "tracked_devices",
+        "scanners",
+        "rssi_history",
+        "rssi_offsets",
+        "scanner_ranging",
+        "device_management",
+    }
 )
 
 
@@ -293,6 +312,211 @@ def async_get_scanner_ranging(hass: HomeAssistant, max_age: float | None = None)
             }
         scanners[address] = heard_by
     return {"version": SNAPSHOT_VERSION, "stamp": nowstamp, "scanners": scanners}
+
+
+# --- device management (the parts of the options flow a UI wants) ----------------
+#
+# Bermuda's options flow is the only way to pick devices to track, add FindMy
+# accessories or change the global options. These give another integration
+# (or a service call) the same abilities: list what could be tracked, change
+# the tracked set, manage FindMy keys, read and write the global options.
+# Every write goes through hass.config_entries.async_update_entry so it is
+# persisted and reloaded exactly as the flow would.
+
+CANDIDATE_MAX_AGE = 2 * 3600.0  # like the flow: a random MAC unseen this long is useless
+MANAGED_OPTIONS = frozenset(
+    {
+        "ref_power",
+        "attenuation",
+        "max_area_radius",
+        "max_velocity",
+        "devtracker_nothome_timeout",
+        "update_interval",
+        "smoothing_samples",
+        "create_scanner_entities",
+        "track_categories",
+        "exclude_devices",
+    }
+)
+
+
+@callback
+def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_MAX_AGE) -> list[dict] | None:
+    """
+    Every device Bermuda hears that could be tracked but is not yet, newest first.
+
+    Mirrors the options flow's device picker: scanners, Private BLE devices
+    (tracked automatically), FindMy accessories (their own list) and Tile
+    source addresses already bound to a Tile are left out, as is anything
+    unseen for ``max_age`` seconds. Each row carries ``config_value`` - the
+    string to pass to ``async_set_tracked_devices`` - which is the address
+    for ordinary devices and the metadevice id for a Tile (so it keeps being
+    tracked across address rotations).
+
+    Returns None if Bermuda is not set up.
+    """
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    nowstamp = monotonic_time_coarse()
+    tile_manager = getattr(coordinator, "tile_manager", None)
+    tile_bound = tile_manager.bound_sources() if tile_manager is not None else set()
+    rows: list[dict] = []
+    for address, device in coordinator.devices.items():
+        if getattr(device, "is_scanner", False) or getattr(device, "create_sensor", False):
+            continue
+        address_type = getattr(device, "address_type", None)
+        if address_type in (ADDR_TYPE_PRIVATE_BLE_DEVICE, ADDR_TYPE_FINDMY):
+            continue
+        last_seen = getattr(device, "last_seen", None) or 0
+        if not last_seen or nowstamp - last_seen > max_age:
+            continue
+        is_tile = bool(getattr(device, "is_tile", False))
+        if is_tile and address in tile_bound:
+            continue
+        if address_type == ADDR_TYPE_TILE:
+            kind, config_value = "tile", address.upper()
+        elif is_tile:
+            from .bermuda_tile import tile_metadevice_id  # noqa: PLC0415
+
+            kind, config_value = "tile", tile_metadevice_id(address).upper()
+        elif address_type == ADDR_TYPE_IBEACON:
+            kind, config_value = "ibeacon", address.upper()
+        else:
+            kind, config_value = "device", address.upper()
+        adverts = getattr(device, "adverts", None) or {}
+        fresh = [a for a in adverts.values() if getattr(a, "stamp", None) and nowstamp - a.stamp <= 60]
+        best_rssi = max((a.rssi for a in fresh if getattr(a, "rssi", None) is not None), default=None)
+        rows.append(
+            {
+                "address": address,
+                "config_value": config_value,
+                "kind": kind,
+                "name": getattr(device, "name", None) or address,
+                "manufacturer": getattr(device, "manufacturer", None),
+                "address_type": address_type,
+                "area_name": getattr(device, "area_name", None),
+                "last_seen_age": nowstamp - last_seen,
+                "first_seen_age": (nowstamp - device.first_seen) if getattr(device, "first_seen", None) else None,
+                "scanners": len(fresh),
+                "best_rssi": best_rssi,
+            }
+        )
+    rows.sort(key=lambda r: r["last_seen_age"])
+    return rows
+
+
+async def async_set_tracked_devices(hass: HomeAssistant, add=(), remove=()) -> list[str] | None:
+    """
+    Add and/or remove tracked devices; returns the new configured list.
+
+    Values are what ``async_get_device_candidates`` reports as ``config_value``
+    (an address, or a Tile metadevice id). Persisted to the config entry's
+    options, which reloads Bermuda the same way the options flow does.
+    Returns None if Bermuda is not set up.
+    """
+    entry, coordinator = _entry_and_coordinator(hass)
+    if entry is None or coordinator is None:
+        return None
+    current = [str(a).upper() for a in entry.options.get(CONF_DEVICES, [])]
+    remove_set = {str(a).upper() for a in remove}
+    new = [a for a in current if a not in remove_set]
+    for a in add:
+        a = str(a).upper()
+        if a and a not in new:
+            new.append(a)
+    if new != current:
+        hass.config_entries.async_update_entry(entry, options={**entry.options, CONF_DEVICES: new})
+    return new
+
+
+@callback
+def async_get_findmy_accessories(hass: HomeAssistant) -> list[dict] | None:
+    """The configured FindMy accessories with their current binding state, or None."""
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    manager = getattr(coordinator, "findmy_manager", None)
+    if manager is None:
+        return []
+    nowstamp = monotonic_time_coarse()
+    rows = []
+    for acc in manager.accessories.values():
+        metadevice = coordinator.devices.get(acc.address)
+        sources = getattr(metadevice, "metadevice_sources", None) or []
+        last_seen = getattr(metadevice, "last_seen", None) or None
+        rows.append(
+            {
+                "address": acc.address,
+                "name": acc.friendly_name,
+                "model": getattr(acc, "model", None),
+                "alignment_index": getattr(acc, "alignment_index", None),
+                "current_source": sources[0] if sources else None,
+                "last_seen_age": (nowstamp - last_seen) if last_seen else None,
+            }
+        )
+    return rows
+
+
+async def async_add_findmy_accessory(hass: HomeAssistant, accessory_json: str, name: str | None = None) -> dict | None:
+    """Add a FindMy accessory from its exported key JSON, as the options flow does.
+
+    Raises FindMyKeyError on bad input. Returns None if Bermuda is not set up.
+    """
+    from .bermuda_findmy import FindMyAccessoryKeys  # noqa: PLC0415
+
+    entry, coordinator = _entry_and_coordinator(hass)
+    if entry is None or coordinator is None:
+        return None
+    accessory = FindMyAccessoryKeys.from_json(accessory_json)
+    if name and name.strip():
+        accessory.name = name.strip()
+    coordinator.findmy_manager.add_accessory(accessory)
+    hass.config_entries.async_update_entry(entry, data={**entry.data, CONFDATA_FINDMY: coordinator.findmy_manager.dump()})
+    return {"address": accessory.address, "name": accessory.friendly_name}
+
+
+async def async_remove_findmy_accessory(hass: HomeAssistant, address: str) -> bool | None:
+    """Remove a FindMy accessory by its metadevice address. None if Bermuda is not set up."""
+    entry, coordinator = _entry_and_coordinator(hass)
+    if entry is None or coordinator is None:
+        return None
+    removed = coordinator.findmy_manager.remove_accessory(address)
+    if removed:
+        save = getattr(coordinator, "async_save_findmy_alignment", None)
+        if save is not None:
+            await save()
+        hass.config_entries.async_update_entry(
+            entry, data={**entry.data, CONFDATA_FINDMY: coordinator.findmy_manager.dump()}
+        )
+    return bool(removed)
+
+
+@callback
+def async_get_options(hass: HomeAssistant) -> dict | None:
+    """The global options a UI may edit (see MANAGED_OPTIONS), current values only."""
+    entry, _coordinator = _entry_and_coordinator(hass)
+    if entry is None:
+        return None
+    return {k: v for k, v in entry.options.items() if k in MANAGED_OPTIONS}
+
+
+async def async_set_options(hass: HomeAssistant, changes: dict) -> dict | None:
+    """
+    Change global options. Only MANAGED_OPTIONS keys are accepted (ValueError
+    otherwise); the entry is updated and Bermuda reloads as after the flow.
+    Returns the new managed options, or None if Bermuda is not set up.
+    """
+    entry, _coordinator = _entry_and_coordinator(hass)
+    if entry is None:
+        return None
+    unknown = sorted(k for k in changes if k not in MANAGED_OPTIONS)
+    if unknown:
+        raise ValueError(f"not a managed option: {', '.join(unknown)}")
+    new_options = {**entry.options, **changes}
+    if new_options != dict(entry.options):
+        hass.config_entries.async_update_entry(entry, options=new_options)
+    return {k: v for k, v in new_options.items() if k in MANAGED_OPTIONS}
 
 
 @callback

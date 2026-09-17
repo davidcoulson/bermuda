@@ -106,6 +106,13 @@
         "data": {
           "remove": "Accessories to remove"
         }
+      },
+      "scanners": {
+        "title": "Scanner status",
+        "description": "{scanner_table}",
+        "menu_options": {
+          "init": "Back"
+        }
       }
     }
   },

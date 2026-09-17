@@ -25,6 +25,13 @@
           "sensor": "Capteur activé",
           "switch": "Interrupteur activé"
         }
+      },
+      "scanners": {
+        "title": "Scanner status",
+        "description": "{scanner_table}",
+        "menu_options": {
+          "init": "Back"
+        }
       }
     }
   }

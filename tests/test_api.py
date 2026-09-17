@@ -548,3 +548,99 @@ def test_scanner_ranging_is_none_without_bermuda_and_advertised_as_a_feature():
     hass = SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
     assert async_get_scanner_ranging(hass) is None
     assert "scanner_ranging" in SNAPSHOT_FEATURES
+
+
+# --- device management ---------------------------------------------------------
+
+
+def _mgmt_hass(configured=("AA:AA:AA:AA:AA:01",), devices=None):
+    from custom_components.bermuda.const import CONF_DEVICES
+
+    entry = SimpleNamespace(options={CONF_DEVICES: list(configured)}, data={},
+                            runtime_data=SimpleNamespace(coordinator=SimpleNamespace(devices=devices or {})))
+    updates = []
+
+    def async_update_entry(e, options=None, data=None):
+        if options is not None:
+            e.options = options
+        if data is not None:
+            e.data = data
+        updates.append((options, data))
+
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_entries=lambda domain: [entry] if domain == DOMAIN else [],
+            async_update_entry=async_update_entry,
+        )
+    )
+    return hass, entry, updates
+
+
+def test_set_tracked_devices_adds_removes_and_persists():
+    import asyncio
+    from custom_components.bermuda.api import async_set_tracked_devices
+
+    hass, entry, updates = _mgmt_hass()
+    new = asyncio.run(async_set_tracked_devices(hass, add=["tile_24d1093b0211", "AA:AA:AA:AA:AA:01"], remove=[]))
+    assert new == ["AA:AA:AA:AA:AA:01", "TILE_24D1093B0211"]          # upper-cased, de-duplicated
+    assert entry.options["configured_devices"] == new and len(updates) == 1
+    new = asyncio.run(async_set_tracked_devices(hass, remove=["aa:aa:aa:aa:aa:01"]))
+    assert new == ["TILE_24D1093B0211"] and len(updates) == 2
+    # A no-op change does not touch the entry (no needless reload).
+    asyncio.run(async_set_tracked_devices(hass, add=["TILE_24D1093B0211"]))
+    assert len(updates) == 2
+
+
+def test_device_candidates_mirror_the_flows_picker(monkeypatch):
+    import custom_components.bermuda.api as api_module
+    from custom_components.bermuda.api import async_get_device_candidates
+    from custom_components.bermuda.const import ADDR_TYPE_PRIVATE_BLE_DEVICE
+
+    monkeypatch.setattr(api_module, "monotonic_time_coarse", lambda: 10_000.0)
+    adv = SimpleNamespace(stamp=9_990.0, rssi=-66)
+
+    def dev(address, **kw):
+        base = dict(name=address, is_scanner=False, create_sensor=False, address_type="bd_addr_other",
+                    last_seen=9_995.0, first_seen=9_000.0, adverts={"x": adv}, is_tile=False, manufacturer=None,
+                    area_name=None)
+        base.update(kw)
+        return SimpleNamespace(address=address, **base)
+
+    devices = {
+        "aa:00:00:00:00:01": dev("aa:00:00:00:00:01", name="Beacon"),
+        "aa:00:00:00:00:02": dev("aa:00:00:00:00:02", is_scanner=True),
+        "aa:00:00:00:00:03": dev("aa:00:00:00:00:03", create_sensor=True),
+        "aa:00:00:00:00:04": dev("aa:00:00:00:00:04", address_type=ADDR_TYPE_PRIVATE_BLE_DEVICE),
+        "aa:00:00:00:00:05": dev("aa:00:00:00:00:05", last_seen=1.0),                   # too old
+        "24:d1:09:3b:02:11": dev("24:d1:09:3b:02:11", is_tile=True, manufacturer="Tile"),
+        "15:09:c2:45:24:28": dev("15:09:c2:45:24:28", is_tile=True),                     # bound: hidden
+    }
+    tile_manager = SimpleNamespace(bound_sources=lambda: {"15:09:c2:45:24:28"})
+    hass, entry, _ = _mgmt_hass(devices=devices)
+    entry.runtime_data.coordinator.tile_manager = tile_manager
+
+    rows = async_get_device_candidates(hass)
+    assert [r["address"] for r in rows] == ["aa:00:00:00:00:01", "24:d1:09:3b:02:11"]
+    beacon, tile = rows
+    assert beacon["config_value"] == "AA:00:00:00:00:01" and beacon["kind"] == "device"
+    assert tile["config_value"] == "TILE_24D1093B0211" and tile["kind"] == "tile"
+    assert tile["scanners"] == 1 and tile["best_rssi"] == -66 and tile["last_seen_age"] == 5.0
+
+
+def test_options_are_read_and_written_within_the_managed_set():
+    import asyncio
+    import pytest
+    from custom_components.bermuda.api import async_get_options, async_set_options
+
+    hass, entry, updates = _mgmt_hass()
+    entry.options.update({"ref_power": -55, "attenuation": 3.0, "rssi_offsets": {"x": 1}})
+    assert async_get_options(hass) == {"ref_power": -55, "attenuation": 3.0}   # rssi_offsets has its own API
+    out = asyncio.run(async_set_options(hass, {"attenuation": 2.5}))
+    assert out["attenuation"] == 2.5 and entry.options["rssi_offsets"] == {"x": 1} and len(updates) == 1
+    with pytest.raises(ValueError):
+        asyncio.run(async_set_options(hass, {"configured_devices": []}))
+
+
+def test_management_is_advertised_as_a_feature():
+    from custom_components.bermuda.api import SNAPSHOT_FEATURES
+    assert "device_management" in SNAPSHOT_FEATURES

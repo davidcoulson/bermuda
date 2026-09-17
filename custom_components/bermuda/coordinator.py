@@ -18,6 +18,7 @@ from homeassistant.components.bluetooth.api import _get_manager
 from homeassistant.const import MAJOR_VERSION as HA_VERSION_MAJ
 from homeassistant.const import MINOR_VERSION as HA_VERSION_MIN
 from homeassistant.const import Platform
+from homeassistant.exceptions import HomeAssistantError
 from homeassistant.core import (
     Event,
     HomeAssistant,
@@ -309,6 +310,50 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
         self.devices: dict[str, BermudaDevice] = {}
         # self.updaters: dict[str, BermudaPBDUCoordinator] = {}
+
+        # Device management without the options flow (see api.py): what a
+        # front end such as Sextant, or an automation, needs to add trackers,
+        # FindMy accessories and change global options.
+        hass.services.async_register(
+            DOMAIN,
+            "track_devices",
+            self.service_track_devices,
+            vol.Schema(
+                {
+                    vol.Optional("add", default=[]): vol.All(cv.ensure_list, [cv.string]),
+                    vol.Optional("remove", default=[]): vol.All(cv.ensure_list, [cv.string]),
+                }
+            ),
+            SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "list_device_candidates",
+            self.service_list_device_candidates,
+            vol.Schema({vol.Optional("max_age", default=7200): vol.Coerce(float)}),
+            SupportsResponse.ONLY,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "add_findmy_accessory",
+            self.service_add_findmy_accessory,
+            vol.Schema({vol.Required("accessory_json"): cv.string, vol.Optional("name"): cv.string}),
+            SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "remove_findmy_accessory",
+            self.service_remove_findmy_accessory,
+            vol.Schema({vol.Required("address"): cv.string}),
+            SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "set_options",
+            self.service_set_options,
+            vol.Schema({vol.Required("options"): dict}),
+            SupportsResponse.OPTIONAL,
+        )
 
         # Register the dump_devices service
         hass.services.async_register(
@@ -1869,6 +1914,44 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     #             CONFDATA_SCANNERS: confdata_scanners,
     #         },
     #     )
+
+    # --- device management services (thin wrappers over api.py) -----------------
+
+    async def service_track_devices(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        devices = await api.async_set_tracked_devices(self.hass, add=call.data.get("add", []), remove=call.data.get("remove", []))
+        return {"configured_devices": devices or []}
+
+    async def service_list_device_candidates(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        return {"candidates": api.async_get_device_candidates(self.hass, max_age=call.data.get("max_age", 7200)) or []}
+
+    async def service_add_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+        from .bermuda_findmy import FindMyKeyError  # noqa: PLC0415
+
+        try:
+            added = await api.async_add_findmy_accessory(self.hass, call.data["accessory_json"], call.data.get("name"))
+        except FindMyKeyError as err:
+            raise HomeAssistantError(f"Invalid FindMy accessory keys: {err}") from err
+        return added or {}
+
+    async def service_remove_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        removed = await api.async_remove_findmy_accessory(self.hass, call.data["address"])
+        return {"removed": bool(removed)}
+
+    async def service_set_options(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        try:
+            options = await api.async_set_options(self.hass, dict(call.data["options"]))
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        return {"options": options or {}}
 
     async def service_dump_devices(self, call: ServiceCall) -> ServiceResponse:  # pylint: disable=unused-argument;
         """Return a dump of beacon advertisements by receiver."""

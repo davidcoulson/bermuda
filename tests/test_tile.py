@@ -281,3 +281,145 @@ def test_tile_capture_reports_each_raw_tile_address():
     assert by_addr[b.address]["bound_to"] == tile_id and by_addr[c.address]["bound_to"] is None
     assert by_addr[b.address]["scanners"]["s1"]["hist_rssi"] == [-69, -72, -70]
     assert by_addr[b.address]["last_seen_age"] == 5.0
+
+
+# --- phase 3: identity over GATT --------------------------------------------- #
+
+
+class _Hass:
+    """Just enough hass for the probe worker: tasks run on the test loop."""
+
+    def __init__(self):
+        self.tasks = []
+
+    def async_create_task(self, coro):
+        task = asyncio.get_event_loop().create_task(coro)
+        self.tasks.append(task)
+        return task
+
+
+def _probing_house(now=10_000.0):
+    """Like _house, but B and C have the SAME RSSI pattern as A, so the
+    heuristic alone would refuse (ambiguous) - only identity can decide."""
+    a = _dev("29:10:b2:bc:a8:5a", now - 3600, now - 60, {"s1": [-70, -71, -70], "s2": [-80, -79, -81]})
+    b = _dev("17:31:c5:0f:0c:9e", now - 55, now - 5, {"s1": [-69, -72, -70], "s2": [-78, -80, -79]})
+    c = _dev("2a:fe:fc:10:70:fc", now - 50, now - 5, {"s1": [-70, -70, -70], "s2": [-79, -80, -80]})
+    return a, b, c
+
+
+def test_identity_resolves_a_rotation_the_heuristic_cannot():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _probing_house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        uids = {a.address: "cafe01", b.address: "beef02", c.address: "cafe01"}
+        probed = []
+
+        async def fake_probe(hass, address):
+            probed.append(address)
+            return uids[address]
+
+        manager._probe_fn = fake_probe
+        manager.bindings[tile_id] = [a.address]
+
+        manager.async_update(nowstamp=now)          # learns A's id (probe queued), nothing decided
+        await asyncio.gather(*coord.hass.tasks)
+        assert manager.uids[tile_id] == "cafe01" and probed == [a.address]
+        assert manager.bindings[tile_id][0] == a.address
+
+        manager.async_update(nowstamp=now + 1)      # A quiet: candidates B and C get probed
+        await asyncio.gather(*coord.hass.tasks)
+        assert set(probed[1:]) == {b.address, c.address}
+        # C answered with our id: bound by identity from inside the probe.
+        assert manager.bindings[tile_id][0] == c.address
+        assert manager.last_handover["reason"] == "tile id"
+        assert manager.ambiguous_handovers == 0
+        diag = manager.diagnostics()
+        assert diag["probes"] == 3 and diag["probe_failures"] == 0 and diag["uids"] == {tile_id: "cafe01"}
+
+    asyncio.run(scenario())
+
+
+def test_heuristic_is_the_fallback_when_nothing_can_be_read():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        manager.uids[tile_id] = "cafe01"            # known id, but no proxy can connect right now
+
+        async def unavailable(hass, address):
+            raise bermuda_tile.TileProbeUnavailable("no connectable scanner")
+
+        manager._probe_fn = unavailable
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)          # probes queued, undecided this cycle
+        assert manager.bindings[tile_id][0] == a.address
+        await asyncio.gather(*coord.hass.tasks)
+        manager.async_update(nowstamp=now + 1)      # every candidate unreachable: RSSI heuristic decides
+        assert manager.bindings[tile_id][0] == b.address
+        assert manager.last_handover["reason"] == "rssi pattern"
+        assert manager.diagnostics()["probe_failures"] == 2
+
+    asyncio.run(scenario())
+
+
+def test_a_tile_without_an_id_characteristic_is_never_a_successor():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        manager.uids[tile_id] = "cafe01"
+
+        async def fake_probe(hass, address):
+            return None if address == b.address else "other"
+
+        manager._probe_fn = fake_probe
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)
+        await asyncio.gather(*coord.hass.tasks)
+        manager.async_update(nowstamp=now + 1)
+        # B would have won the RSSI heuristic, but it has no id (it does not
+        # rotate) and C is someone else's Tile: nothing binds.
+        assert manager.bindings[tile_id][0] == a.address
+        assert manager.handovers == 0
+
+    asyncio.run(scenario())
+
+
+def test_probe_results_are_not_repeated_and_failures_retry_later(monkeypatch):
+    async def scenario():
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
+        coord = _Coord({}, configured=[])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        calls = []
+
+        async def flaky(hass, address):
+            calls.append(address)
+            if len(calls) == 1:
+                raise OSError("boom")
+            return "cafe01"
+
+        manager._probe_fn = flaky
+        manager._request_probe("aa:00:00:00:00:01")
+        await asyncio.gather(*coord.hass.tasks)
+        manager._request_probe("aa:00:00:00:00:01")           # failed 0 s ago: not retried yet
+        assert calls == ["aa:00:00:00:00:01"]
+        clock["t"] += bermuda_tile.TILE_PROBE_RETRY_SECS + 1
+        manager._request_probe("aa:00:00:00:00:01")
+        await asyncio.gather(*coord.hass.tasks)
+        assert len(calls) == 2
+        manager._request_probe("aa:00:00:00:00:01")           # answered: never asked again
+        assert len(calls) == 2 and manager._probes["aa:00:00:00:00:01"]["uid"] == "cafe01"
+
+    asyncio.run(scenario())

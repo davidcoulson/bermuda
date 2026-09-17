@@ -13,3 +13,78 @@ dump_devices:
       required: false
       example: "False"
       default: false
+
+track_devices:
+  name: Track devices
+  description: >-
+    Add and/or remove tracked devices without the options flow. Values are
+    addresses, or Tile metadevice ids (TILE_<12 hex>) as listed by
+    list_device_candidates. Bermuda reloads to apply the change.
+  fields:
+    add:
+      name: Add
+      description: Devices to start tracking.
+      example: '["AA:BB:CC:DD:EE:FF", "TILE_24D1093B0211"]'
+      selector:
+        object:
+    remove:
+      name: Remove
+      description: Devices to stop tracking.
+      selector:
+        object:
+
+list_device_candidates:
+  name: List device candidates
+  description: >-
+    Every device Bermuda hears that could be tracked but is not yet, with the
+    config_value to pass to track_devices.
+  fields:
+    max_age:
+      name: Max age
+      description: Skip devices not heard for this many seconds (default 7200).
+      selector:
+        number:
+          min: 60
+          max: 86400
+          unit_of_measurement: seconds
+          mode: box
+
+add_findmy_accessory:
+  name: Add FindMy accessory
+  description: Add an AirTag or licensed FindMy accessory from its exported key JSON.
+  fields:
+    accessory_json:
+      name: Accessory JSON
+      required: true
+      selector:
+        text:
+          multiline: true
+    name:
+      name: Name
+      selector:
+        text:
+
+remove_findmy_accessory:
+  name: Remove FindMy accessory
+  fields:
+    address:
+      name: Address
+      description: The accessory's metadevice address (findmy_...).
+      required: true
+      selector:
+        text:
+
+set_options:
+  name: Set global options
+  description: >-
+    Change Bermuda's global options (ref_power, attenuation, max_area_radius,
+    max_velocity, devtracker_nothome_timeout, update_interval,
+    smoothing_samples, create_scanner_entities, track_categories,
+    exclude_devices). Bermuda reloads to apply.
+  fields:
+    options:
+      name: Options
+      required: true
+      example: '{"ref_power": -55, "attenuation": 3.0}'
+      selector:
+        object:
