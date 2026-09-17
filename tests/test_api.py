@@ -357,3 +357,37 @@ def test_snapshot_without_a_scanner_set_still_works():
 
     assert async_get_advert_snapshot(hass)["scanners"] == {}
     assert async_get_scanners(hass) == {}
+
+
+def test_history_and_path_loss_parameters_ride_along():
+    """A consumer that wants its own estimator gets the raw samples and the
+    exact parameters Bermuda used, so its distances land on Bermuda's scale."""
+    coordinator = _make_tracked_coordinator()
+    advert = next(iter(coordinator.devices["aa:bb:cc:dd:ee:ff"].adverts.values()))
+    advert.hist_rssi = [-63, -65, -70, -61]
+    advert.hist_stamp = [999.0, 998.0, 996.5, 995.0]
+    advert.ref_power = 0          # "use the global option"
+    advert.conf_ref_power = -55.0
+    advert.conf_attenuation = 3.0
+    advert.conf_rssi_offset = 2
+    hass = _make_hass(coordinator)
+
+    plain = async_get_advert_snapshot(hass, tracked_only=True)
+    scanner = plain["devices"]["aa:bb:cc:dd:ee:ff"]["scanners"]["f1:74:64:00:00:01"]
+    assert "history" not in scanner
+    assert scanner["ref_power"] == -55.0
+    assert scanner["attenuation"] == 3.0
+    assert scanner["rssi_offset"] == 2
+
+    with_hist = async_get_advert_snapshot(hass, tracked_only=True, include_history=True)
+    scanner = with_hist["devices"]["aa:bb:cc:dd:ee:ff"]["scanners"]["f1:74:64:00:00:01"]
+    assert scanner["history"] == [[-63, 999.0], [-65, 998.0], [-70, 996.5], [-61, 995.0]]
+
+    # A per-device ref_power override wins over the global option.
+    advert.ref_power = -59.0
+    again = async_get_advert_snapshot(hass, tracked_only=True)
+    assert again["devices"]["aa:bb:cc:dd:ee:ff"]["scanners"]["f1:74:64:00:00:01"]["ref_power"] == -59.0
+
+    import json
+
+    json.dumps(with_hist)

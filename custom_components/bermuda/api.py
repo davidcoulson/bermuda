@@ -52,7 +52,11 @@ SNAPSHOT_VERSION = 1
 #   tracked_only     async_get_advert_snapshot(..., tracked_only=True)
 #   tracked_devices  async_get_tracked_devices()
 #   scanners         async_get_scanners(), and a top-level "scanners" map in the snapshot
-SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners"})
+#   rssi_history     async_get_advert_snapshot(..., include_history=True) adds a
+#                    per-advert "history" of recent (rssi, stamp) pairs, and every
+#                    advert carries the path-loss parameters Bermuda used
+#                    ("ref_power", "attenuation", "rssi_offset")
+SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners", "rssi_history"})
 
 
 @callback
@@ -197,6 +201,7 @@ def async_get_advert_snapshot(
     *,
     include_empty: bool = False,
     tracked_only: bool = False,
+    include_history: bool = False,
 ) -> dict[str, Any] | None:
     """
     Return a point-in-time snapshot of every device/scanner advertisement.
@@ -208,6 +213,17 @@ def async_get_advert_snapshot(
     `tracked` flag below), skipping the walk over every other device in range;
     a consumer that only ever reads tracked devices should always pass it, as
     that is usually the difference between a dozen devices and several hundred.
+
+    `include_history` adds each advert's recent raw samples as
+    ``"history": [[rssi, stamp], ...]`` (newest first, at most HIST_KEEP_COUNT
+    entries). Bermuda's own ``distance`` is a running-minimum-biased average
+    designed for "which scanner is nearest"; a consumer fitting a position
+    from several scanners at once may prefer its own, symmetric estimator over
+    the raw samples, and needs the same path-loss parameters Bermuda would
+    apply - so every advert also carries ``ref_power`` (the effective value,
+    per-device override or global), ``attenuation`` and the per-scanner
+    ``rssi_offset``. Bermuda's own conversion is
+    ``10 ** ((ref_power - (rssi + rssi_offset)) / (10 * attenuation))``.
 
     Returns None if Bermuda is not set up.
 
@@ -318,7 +334,24 @@ def async_get_advert_snapshot(
                 "stamp": advert.stamp,
                 "age": nowstamp - advert.stamp if advert.stamp else None,
                 "scanner_last_seen_age": (nowstamp - scanner_device.last_seen if scanner_device.last_seen else None),
+                # The path-loss parameters Bermuda applied to THIS advert, so a
+                # consumer converting raw rssi itself lands on the same scale.
+                # A device-level ref_power of 0 means "use the global option".
+                "ref_power": (getattr(advert, "ref_power", 0) or getattr(advert, "conf_ref_power", None)),
+                "attenuation": getattr(advert, "conf_attenuation", None),
+                "rssi_offset": getattr(advert, "conf_rssi_offset", 0) or 0,
             }
+            if include_history:
+                hist_rssi = getattr(advert, "hist_rssi", None) or ()
+                hist_stamp = getattr(advert, "hist_stamp", None) or ()
+                # Both lists are pushed together (newest first) in
+                # update_advertisement, so zip() pairs each sample with its
+                # own stamp; strict=False tolerates a transient length skew.
+                scanners[advert.scanner_address]["history"] = [
+                    [rssi, stamp]
+                    for rssi, stamp in zip(hist_rssi, hist_stamp, strict=False)
+                    if rssi is not None and stamp
+                ]
 
         devices[address] = {
             "name": device.name,
