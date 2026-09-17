@@ -136,5 +136,19 @@ async def async_unload_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> 
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> None:
-    """Reload config entry."""
+    """Reload config entry - unless the change is already live in memory.
+
+    api.async_set_rssi_offsets applies new offsets to the running coordinator
+    and then persists them to the entry so they survive a restart. That
+    persist fires this listener; reloading would tear down and rebuild the
+    coordinator (dropping every advert history) for a change it is already
+    carrying, so when the entry's options are exactly what the coordinator
+    said it applied, there is nothing to do.
+    """
+    coordinator = getattr(getattr(entry, "runtime_data", None), "coordinator", None)
+    pending = getattr(coordinator, "inline_options", None)
+    if pending is not None and dict(entry.options) == pending:
+        coordinator.inline_options = None
+        _LOGGER.debug("Options change already applied in memory; skipping reload")
+        return
     hass.config_entries.async_schedule_reload(entry.entry_id)

@@ -33,7 +33,7 @@ from bluetooth_data_tools import monotonic_time_coarse
 from homeassistant.core import callback
 from homeassistant.util import slugify
 
-from .const import DOMAIN
+from .const import CONF_ATTENUATION, CONF_REF_POWER, CONF_RSSI_OFFSETS, DOMAIN
 
 if TYPE_CHECKING:
     from homeassistant.core import HomeAssistant
@@ -56,7 +56,20 @@ SNAPSHOT_VERSION = 1
 #                    per-advert "history" of recent (rssi, stamp) pairs, and every
 #                    advert carries the path-loss parameters Bermuda used
 #                    ("ref_power", "attenuation", "rssi_offset")
-SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners", "rssi_history"})
+#   rssi_offsets     async_get_rssi_offsets() / async_set_rssi_offsets(): read and
+#                    write Bermuda's per-scanner rssi offsets, applied live and
+#                    persisted without reloading the entry
+SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners", "rssi_history", "rssi_offsets"})
+
+
+@callback
+def _entry_and_coordinator(hass: HomeAssistant) -> tuple[Any, BermudaDataUpdateCoordinator] | tuple[None, None]:
+    for entry in hass.config_entries.async_entries(DOMAIN):
+        runtime_data = getattr(entry, "runtime_data", None)
+        coordinator = getattr(runtime_data, "coordinator", None)
+        if coordinator is not None:
+            return entry, coordinator
+    return None, None
 
 
 @callback
@@ -67,12 +80,70 @@ def async_get_coordinator(hass: HomeAssistant) -> BermudaDataUpdateCoordinator |
     Callers can use the returned coordinator's `async_add_listener()` to be
     notified after each update cycle, then call `async_get_advert_snapshot()`.
     """
-    for entry in hass.config_entries.async_entries(DOMAIN):
-        runtime_data = getattr(entry, "runtime_data", None)
-        coordinator = getattr(runtime_data, "coordinator", None)
-        if coordinator is not None:
-            return coordinator
-    return None
+    return _entry_and_coordinator(hass)[1]
+
+
+@callback
+def async_get_rssi_offsets(hass: HomeAssistant) -> dict[str, Any] | None:
+    """
+    Bermuda's per-scanner rssi offsets and the global path-loss parameters.
+
+    Shape::
+
+        {
+          "offsets": {"<scanner address>": <dB>, ...},   # lower-cased addresses
+          "attenuation": float,   # global option
+          "ref_power": float,     # global option (per-device overrides not included)
+        }
+
+    A consumer converting its own per-receiver distance correction ``c`` into
+    an offset should use ``delta_dB = -10 * attenuation * log10(c)`` and add
+    it to the scanner's current offset. Returns None if Bermuda is not set up.
+    """
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    options = coordinator.options
+    return {
+        "offsets": {str(k).lower(): float(v) for k, v in (options.get(CONF_RSSI_OFFSETS) or {}).items()},
+        "attenuation": options.get(CONF_ATTENUATION),
+        "ref_power": options.get(CONF_REF_POWER),
+    }
+
+
+@callback
+def async_set_rssi_offsets(
+    hass: HomeAssistant,
+    offsets: dict[str, float],
+    *,
+    merge: bool = True,
+    persist: bool = True,
+) -> dict[str, float] | None:
+    """
+    Set per-scanner rssi offsets (dB), live, and persist them.
+
+    The offsets are applied to the running coordinator immediately (every
+    existing advert from a changed scanner is recomputed), then written to
+    the config entry so they survive a restart - WITHOUT reloading the entry,
+    which would otherwise discard every advert history for a change already
+    in effect. ``merge`` False replaces the whole map; scanners left out
+    revert to 0. ``persist`` False keeps the change in memory only.
+
+    Returns the resulting full map, or None if Bermuda is not set up.
+    """
+    entry, coordinator = _entry_and_coordinator(hass)
+    if coordinator is None:
+        return None
+    applied = coordinator.async_apply_rssi_offsets(offsets, merge=merge)
+    if persist and entry is not None:
+        new_options = {**dict(entry.options), CONF_RSSI_OFFSETS: dict(applied)}
+        if new_options != dict(entry.options):
+            # Announce the change to the reload listener before the entry
+            # update fires it (async_update_entry schedules listeners as
+            # tasks, so this ordering is safe).
+            coordinator.inline_options = new_options
+            hass.config_entries.async_update_entry(entry, options=new_options)
+    return applied
 
 
 def _slug_memo() -> Any:

@@ -391,3 +391,119 @@ def test_history_and_path_loss_parameters_ride_along():
     import json
 
     json.dumps(with_hist)
+
+
+# --- rssi offsets: live apply, persist without reload ------------------------ #
+
+
+def _offset_fixture():
+    """A coordinator with two scanners' adverts and a hass whose config-entry
+    update is recorded (and whose reload is recorded separately)."""
+    from types import MappingProxyType
+
+    from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
+
+    def _advert(scanner, rssi=-70):
+        a = SimpleNamespace(scanner_address=scanner, rssi=rssi, conf_rssi_offset=0, recomputed=0)
+
+        def _recompute(reading_is_new=True):
+            assert reading_is_new is False
+            a.recomputed += 1
+
+        a._update_raw_distance = _recompute
+        return a
+
+    adverts = {
+        ("dev1", "aa:aa:aa:aa:aa:01"): _advert("aa:aa:aa:aa:aa:01"),
+        ("dev1", "aa:aa:aa:aa:aa:02"): _advert("aa:aa:aa:aa:aa:02"),
+        ("dev2", "aa:aa:aa:aa:aa:01"): _advert("aa:aa:aa:aa:aa:01", rssi=None),
+    }
+    coordinator = SimpleNamespace(
+        options={"rssi_offsets": {"aa:aa:aa:aa:aa:02": 2.0}, "attenuation": 3.0, "ref_power": -55.0},
+        devices={"dev1": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev1"}),
+                 "dev2": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev2"})},
+        inline_options=None,
+    )
+    coordinator.async_apply_rssi_offsets = lambda offsets, merge=True: BermudaDataUpdateCoordinator.async_apply_rssi_offsets(
+        coordinator, offsets, merge=merge
+    )
+    entry = SimpleNamespace(
+        entry_id="e1",
+        options=MappingProxyType({"rssi_offsets": {"aa:aa:aa:aa:aa:02": 2.0}, "attenuation": 3.0}),
+        runtime_data=SimpleNamespace(coordinator=coordinator),
+    )
+    updates, reloads = [], []
+
+    def _update(e, options=None, **kw):
+        e.options = MappingProxyType(dict(options))
+        updates.append(dict(options))
+        return True
+
+    hass = SimpleNamespace(
+        config_entries=SimpleNamespace(
+            async_entries=lambda domain: [entry] if domain == DOMAIN else [],
+            async_update_entry=_update,
+            async_schedule_reload=lambda entry_id: reloads.append(entry_id),
+        )
+    )
+    return hass, entry, coordinator, adverts, updates, reloads
+
+
+def test_get_rssi_offsets_reports_map_and_path_loss_parameters():
+    from custom_components.bermuda.api import async_get_rssi_offsets
+
+    hass, *_ = _offset_fixture()
+    got = async_get_rssi_offsets(hass)
+    assert got == {"offsets": {"aa:aa:aa:aa:aa:02": 2.0}, "attenuation": 3.0, "ref_power": -55.0}
+
+
+def test_set_rssi_offsets_applies_live_and_persists_without_reload():
+    import asyncio
+
+    from custom_components.bermuda import async_reload_entry
+    from custom_components.bermuda.api import async_set_rssi_offsets
+
+    hass, entry, coordinator, adverts, updates, reloads = _offset_fixture()
+
+    result = async_set_rssi_offsets(hass, {"AA:AA:AA:AA:AA:01": -4.4})
+
+    # Merged map, lower-cased, existing scanner kept.
+    assert result == {"aa:aa:aa:aa:aa:01": -4.4, "aa:aa:aa:aa:aa:02": 2.0}
+    assert coordinator.options["rssi_offsets"] == result
+    # Every advert from the changed scanner got the offset and a recompute;
+    # the one with no rssi yet got the offset but no recompute; the other
+    # scanner's advert is untouched.
+    a1, a2, a3 = adverts[("dev1", "aa:aa:aa:aa:aa:01")], adverts[("dev1", "aa:aa:aa:aa:aa:02")], adverts[("dev2", "aa:aa:aa:aa:aa:01")]
+    assert (a1.conf_rssi_offset, a1.recomputed) == (-4.4, 1)
+    assert (a2.conf_rssi_offset, a2.recomputed) == (0, 0)
+    assert (a3.conf_rssi_offset, a3.recomputed) == (-4.4, 0)
+    # Persisted to the entry...
+    assert updates == [{"rssi_offsets": result, "attenuation": 3.0}]
+    # ...and the update listener recognises the change as already live.
+    asyncio.new_event_loop().run_until_complete(async_reload_entry(hass, entry))
+    assert reloads == []
+    assert coordinator.inline_options is None
+    # A different options change (the user editing attenuation) still reloads.
+    entry.options = type(entry.options)({**dict(entry.options), "attenuation": 2.5})
+    asyncio.new_event_loop().run_until_complete(async_reload_entry(hass, entry))
+    assert reloads == ["e1"]
+
+
+def test_set_rssi_offsets_replace_mode_and_no_op_persist():
+    from custom_components.bermuda.api import async_set_rssi_offsets
+
+    hass, entry, coordinator, adverts, updates, _ = _offset_fixture()
+    # Replacing the map drops scanner 02 back to 0 (its advert is recomputed).
+    result = async_set_rssi_offsets(hass, {"aa:aa:aa:aa:aa:01": 1.0}, merge=False)
+    assert result == {"aa:aa:aa:aa:aa:01": 1.0}
+    a2 = adverts[("dev1", "aa:aa:aa:aa:aa:02")]
+    assert (a2.conf_rssi_offset, a2.recomputed) == (0.0, 1)
+    # Setting the same values again changes nothing and does not touch the entry.
+    n = len(updates)
+    async_set_rssi_offsets(hass, {"aa:aa:aa:aa:aa:01": 1.0}, merge=False)
+    assert len(updates) == n
+    # Clamped to Bermuda's own +-127 dB range; None when Bermuda is absent.
+    assert async_set_rssi_offsets(hass, {"aa:aa:aa:aa:aa:01": 500})["aa:aa:aa:aa:aa:01"] == 127.0
+    assert async_set_rssi_offsets(
+        SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda d: [])), {"x": 1}
+    ) is None

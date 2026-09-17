@@ -295,6 +295,46 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 )
             )
 
+    # Options a consumer (api.async_set_rssi_offsets) has already applied in
+    # memory and is about to persist to the config entry. The entry's update
+    # listener compares against this and skips the reload that would
+    # otherwise tear the coordinator down for a change it already carries.
+    inline_options: dict | None = None
+
+    @callback
+    def async_apply_rssi_offsets(self, offsets: dict[str, float], *, merge: bool = True) -> dict[str, float]:
+        """
+        Apply per-scanner rssi offsets (dB) to the running coordinator.
+
+        Every existing advert from a changed scanner has its offset replaced
+        and its raw distance recomputed at once, so the change is live on the
+        next update cycle rather than after a reload. New adverts read the
+        map from ``self.options`` as they always did. With ``merge`` False the
+        map is replaced outright and scanners left out revert to 0.
+
+        Returns the resulting full map (address -> dB, addresses lower-cased).
+        """
+        current = {str(k).lower(): float(v) for k, v in (self.options.get(CONF_RSSI_OFFSETS) or {}).items()}
+        wanted = dict(current) if merge else {}
+        for address, value in offsets.items():
+            wanted[str(address).lower()] = max(-127.0, min(127.0, float(value)))
+        changed = {
+            addr: wanted.get(addr, 0.0)
+            for addr in set(current) | set(wanted)
+            if current.get(addr, 0.0) != wanted.get(addr, 0.0)
+        }
+        self.options[CONF_RSSI_OFFSETS] = wanted
+        if changed:
+            for device in self.devices.values():
+                for advert in (getattr(device, "adverts", None) or {}).values():
+                    scanner_address = getattr(advert, "scanner_address", None)
+                    if scanner_address in changed:
+                        advert.conf_rssi_offset = changed[scanner_address]
+                        if getattr(advert, "rssi", None) is not None:
+                            advert._update_raw_distance(reading_is_new=False)
+            _LOGGER.debug("Applied rssi offsets in memory for %d scanner(s)", len(changed))
+        return wanted
+
     @property
     def scanner_list(self):
         return self._scanner_list
