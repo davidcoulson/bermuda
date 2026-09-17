@@ -34,6 +34,7 @@ from homeassistant.core import callback
 from homeassistant.util import slugify
 
 from .const import (
+    BDADDR_TYPE_RANDOM_RESOLVABLE,
     ADDR_TYPE_FINDMY,
     ADDR_TYPE_IBEACON,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
@@ -341,6 +342,61 @@ MANAGED_OPTIONS = frozenset(
 )
 
 
+# Apple's manufacturer-specific advert is a run of (type, length, payload)
+# records; the types say what kind of device is talking without any key.
+APPLE_COMPANY_ID = 0x004C
+APPLE_ADV_TYPES = {
+    0x02: "ibeacon",
+    0x05: "airdrop",
+    0x07: "proximity_pairing",   # AirPods, Beats, other accessories in their case
+    0x09: "airplay_target",
+    0x0A: "airplay_source",
+    0x0B: "magic_switch",        # Apple Watch
+    0x0C: "handoff",             # iPhone / iPad / Mac
+    0x0D: "tethering_target",
+    0x0E: "tethering_source",
+    0x0F: "nearby_action",
+    0x10: "nearby_info",         # iPhone / iPad / Mac / Watch presence
+    0x12: "findmy",              # offline-finding (AirTag and FindMy-network tags)
+}
+
+
+def apple_advert_kinds(manufacturer_data) -> list[str]:
+    """The Apple advert record types in a manufacturer_data mapping (company 0x004C), by name."""
+    if not isinstance(manufacturer_data, dict):
+        return []
+    payload = manufacturer_data.get(APPLE_COMPANY_ID)
+    if not payload:
+        return []
+    kinds, i, data = [], 0, bytes(payload)
+    while i + 1 < len(data):
+        kind, length = data[i], data[i + 1]
+        name = APPLE_ADV_TYPES.get(kind, f"type_{kind:02x}")
+        if name not in kinds:
+            kinds.append(name)
+        i += 2 + length
+    return kinds
+
+
+def apple_summary(kinds: list[str], address_type: str | None) -> str | None:
+    """One phrase for the heard list: what this Apple device most likely is."""
+    if "findmy" in kinds:
+        return "Find My tag (needs its pairing keys)"
+    if "proximity_pairing" in kinds:
+        return "AirPods / Beats or another accessory"
+    if any(k in kinds for k in ("nearby_info", "handoff", "nearby_action", "airdrop", "tethering_source")):
+        rotates = address_type == BDADDR_TYPE_RANDOM_RESOLVABLE
+        return "iPhone / iPad / Mac / Watch" + (" (rotating address: track it as a Private BLE Device with its IRK)" if rotates else "")
+    if "magic_switch" in kinds:
+        return "Apple Watch"
+    if any(k in kinds for k in ("airplay_target", "airplay_source")):
+        return "AirPlay device (HomePod, Apple TV)"
+    if kinds:
+        return "Apple device"
+    return None
+
+
+
 @callback
 def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_MAX_AGE) -> list[dict] | None:
     """
@@ -391,6 +447,8 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
         # Which scanners heard it in the last minute, so a consumer that only
         # cares about its own placed proxies can drop what a stray one hears.
         scanner_addresses = sorted({str(getattr(a, "scanner_address", "")).lower() for a in fresh if getattr(a, "scanner_address", None)})
+        latest_mfr = next((a.manufacturer_data[0] for a in fresh if getattr(a, "manufacturer_data", None)), None)
+        apple_kinds = apple_advert_kinds(latest_mfr)
         heard_by = sorted(
             (
                 {"address": str(a.scanner_address).lower(), "rssi": a.rssi}
@@ -411,6 +469,8 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
                 "first_seen_age": (nowstamp - device.first_seen) if getattr(device, "first_seen", None) else None,
                 "scanner_addresses": scanner_addresses,
                 "heard_by": heard_by,   # loudest first
+                "apple_kinds": apple_kinds,
+                "apple_summary": apple_summary(apple_kinds, address_type),
                 "scanners": len(fresh),
                 "best_rssi": best_rssi,
             }
@@ -545,7 +605,7 @@ def async_get_tracked_devices(hass: HomeAssistant) -> dict[str, Any] | None:
 
     Shape::
 
-        {"<device address>": {"name": str, "slug": str, "unique_id": str | None}, ...}
+        {"<device address>": {"name": str, "slug": str, "unique_id": str | None, "last_seen_age": float | None}, ...}
 
     Returns None if Bermuda is not set up.
     """
@@ -553,14 +613,17 @@ def async_get_tracked_devices(hass: HomeAssistant) -> dict[str, Any] | None:
     if coordinator is None:
         return None
     cached_slug = _slug_memo()
+    nowstamp = monotonic_time_coarse()
     tracked: dict[str, Any] = {}
     for address, device in coordinator.devices.items():
         if not getattr(device, "create_sensor", False):
             continue
+        last_seen = getattr(device, "last_seen", None)
         tracked[address] = {
             "name": device.name,
             "slug": cached_slug(device.name),
             "unique_id": getattr(device, "unique_id", None),
+            "last_seen_age": (nowstamp - last_seen) if last_seen else None,
         }
     return tracked
 

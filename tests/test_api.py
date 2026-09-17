@@ -644,3 +644,20 @@ def test_options_are_read_and_written_within_the_managed_set():
 def test_management_is_advertised_as_a_feature():
     from custom_components.bermuda.api import SNAPSHOT_FEATURES
     assert "device_management" in SNAPSHOT_FEATURES
+
+
+def test_apple_advert_kinds_and_summary():
+    from custom_components.bermuda import api
+    from custom_components.bermuda.const import BDADDR_TYPE_RANDOM_RESOLVABLE, BDADDR_TYPE_RANDOM_STATIC
+
+    # Nearby Info (0x10, 5 bytes) followed by Handoff (0x0c, 14 bytes) as an iPhone sends them.
+    phone = {0x004C: bytes([0x10, 0x05, 1, 2, 3, 4, 5, 0x0C, 0x0E]) + bytes(14)}
+    assert api.apple_advert_kinds(phone) == ["nearby_info", "handoff"]
+    assert "Private BLE Device" in api.apple_summary(api.apple_advert_kinds(phone), BDADDR_TYPE_RANDOM_RESOLVABLE)
+    assert api.apple_summary(api.apple_advert_kinds(phone), BDADDR_TYPE_RANDOM_STATIC) == "iPhone / iPad / Mac / Watch"
+    pods = {0x004C: bytes([0x07, 0x19]) + bytes(25)}
+    assert api.apple_summary(api.apple_advert_kinds(pods), None).startswith("AirPods")
+    tag = {0x004C: bytes([0x12, 0x19]) + bytes(25)}
+    assert api.apple_summary(api.apple_advert_kinds(tag), None).startswith("Find My")
+    assert api.apple_advert_kinds({0x0059: b"\x01"}) == [] and api.apple_summary([], None) is None
+    assert api.apple_advert_kinds(None) == []
