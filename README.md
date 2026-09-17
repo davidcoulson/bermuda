@@ -105,14 +105,20 @@ the wrong tag. Bindings persist across restarts. Diagnostics also carry a raw
 capture of every Tile address heard (address class, RSSI and payload history
 per scanner) for tuning the heuristic against real data.
 
-**Identity over GATT.** Newer "Private ID" Tiles, the ones that rotate, expose
-their Tile ID through a characteristic that is readable right after
-connecting, before any authentication (as
-[node-tile](https://github.com/lesleyxyz/node-tile) does). When a proxy in
-active mode can reach the tag, Bermuda reads that ID once from the bound
-address and then resolves a rotation by reading each candidate's ID: a match
-binds outright, a different ID rules the candidate out, and a Tile with no ID
-characteristic cannot be a successor because it does not rotate. Candidates
+**Identity over GATT.** A Tile gives up its Tile ID right after connecting,
+before any authentication: through the Tile ID characteristic where a model
+has one, otherwise as a connectionless TDI request on the MEP channel (the
+`feed` service's 9d410018/9d410019 pair, the exchange
+[node-tile](https://github.com/lesleyxyz/node-tile) opens with — every Tile
+seen so far answers this one). When a proxy in active mode can reach the tag,
+Bermuda reads that ID once from the bound address and then resolves a
+rotation by reading each candidate's ID: a match binds outright, a different
+ID rules the candidate out, and a Tile that answers with no ID cannot be a
+successor because it does not rotate. A Tile changes its address right after
+every connection, so the address that appears where a just-probed one went
+silent, with the same RSSI pattern, inherits that answer instead of being
+connected to again (or the loop would never end); connections are capped at
+twenty an hour. Candidates
 are asked whether or not the Tile's own ID is known yet — a Tile whose bound
 address rotated away before its ID was ever read must not wait for a read
 that can never happen — and when the RSSI heuristic then picks a candidate

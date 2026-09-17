@@ -597,3 +597,129 @@ def test_an_orphaned_tile_with_an_unknown_id_learns_its_neighbours_but_binds_not
         assert manager.diagnostics()["bound_age"][tile_id] is None
 
     asyncio.run(scenario())
+
+
+# --- TDI over the MEP channel, post-probe rotation, connection budget -------- #
+
+
+class _MepClient:
+    """A bleak client stub with only the feed service's MEP characteristics."""
+
+    def __init__(self, reply=None, *, echo_cid=True):
+        self.reply, self.echo_cid = reply, echo_cid
+        self.writes, self.notify_cb, self.stopped = [], None, False
+
+    async def start_notify(self, uuid, cb):
+        assert uuid == bermuda_tile.MEP_RSP_UUID
+        self.notify_cb = cb
+
+    async def stop_notify(self, uuid):
+        self.stopped = True
+
+    async def write_gatt_char(self, uuid, data, response=True):
+        assert uuid == bermuda_tile.MEP_CMD_UUID and response is False
+        self.writes.append(bytes(data))
+        if self.reply is None:
+            return
+        cid = bytes(data[1:5]) if self.echo_cid else b"\xff\xff\xff\xff"
+        # somebody else's channel first, then ours
+        self.notify_cb(None, bytearray(b"\x00\x01\x02\x03\x04" + bytes([bermuda_tile.TOA_RSP_TDI]) + b"\x02junk"))
+        self.notify_cb(None, bytearray(b"\x00" + cid + bytes([bermuda_tile.TOA_RSP_TDI]) + self.reply))
+
+
+def test_tdi_read_frames_the_request_and_parses_the_tile_id():
+    async def scenario():
+        client = _MepClient(b"\x02" + bytes.fromhex("0011223344556677"))
+        uid = await bermuda_tile._read_uid_over_mep(client)
+        assert uid == "0011223344556677"
+        (req,) = client.writes
+        assert req[0] == 0 and len(req) == 7 and req[5] == bermuda_tile.TOA_CMD_TDI and req[6] == bermuda_tile.TDI_READ_TILE_ID
+        assert client.stopped
+        # the broadcast connectionless id is accepted too
+        client = _MepClient(b"\x02" + bytes.fromhex("8877665544332211"), echo_cid=False)
+        assert await bermuda_tile._read_uid_over_mep(client) == "8877665544332211"
+
+    asyncio.run(scenario())
+
+
+def test_tdi_read_reports_no_id_and_silence():
+    async def scenario():
+        with pytest.raises(bermuda_tile.TileNoIdCharacteristic):
+            await bermuda_tile._read_uid_over_mep(_MepClient(bytes([bermuda_tile.TDI_ERROR, 1])))
+        with pytest.raises(asyncio.TimeoutError):
+            await bermuda_tile._read_uid_over_mep(_MepClient(None), timeout=0.05)
+
+    asyncio.run(scenario())
+
+
+def test_the_address_a_tile_switches_to_after_a_probe_inherits_the_answer(monkeypatch):
+    """Connecting makes a Tile rotate; the new address must not be connected
+    to again (that would rotate it again, forever) - it inherits the answer."""
+    async def scenario():
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
+        now = clock["t"]
+        a, b, c = _house(now)                     # B matches A's RSSI pattern, C does not
+        a.last_seen = now - 1
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        asked = []
+
+        async def probe(hass, address):
+            asked.append(address)
+            return {a.address: "cafe01", c.address: "beef02"}[address]
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        manager._request_probe(a.address, learn_for=tile_id, nowstamp=now)
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [a.address] and manager.uids[tile_id] == "cafe01"
+        # A goes quiet and B appears 3 s after the probe answered, where A was.
+        clock["t"] = now + 3
+        b.first_seen = b.last_seen = clock["t"]
+        c.first_seen = c.last_seen = clock["t"]
+        manager._request_probe(b.address, nowstamp=clock["t"])
+        manager._request_probe(c.address, nowstamp=clock["t"])
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [a.address, c.address]     # B inherited, C (a different pattern) was asked
+        assert manager._probes[b.address]["inherited_from"] == a.address
+        assert manager.bindings[tile_id][0] == b.address   # inherited id == ours: bound at once
+        diag = manager.diagnostics()
+        assert diag["probes_inherited"] == 1 and diag["probe_results"][b.address]["inherited_from"] == a.address
+
+    asyncio.run(scenario())
+
+
+def test_the_connection_budget_caps_probing(monkeypatch):
+    async def scenario():
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
+        devices = {}
+        for i in range(bermuda_tile.TILE_PROBE_BUDGET + 3):
+            d = _dev(f"aa:00:00:00:00:{i:02x}", clock["t"] - 100, clock["t"], {"s1": [-60 - i, -60 - i, -60 - i], "s2": [-90, -90, -90]})
+            devices[d.address] = d
+        coord = _Coord(devices, configured=[])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        asked = []
+
+        async def probe(hass, address):
+            asked.append(address)
+            raise bermuda_tile.TileProbeUnavailable("busy")
+
+        manager._probe_fn = probe
+        for address in devices:
+            manager._request_probe(address, nowstamp=clock["t"])
+        await asyncio.gather(*coord.hass.tasks)
+        assert len(asked) == bermuda_tile.TILE_PROBE_BUDGET
+        assert manager.diagnostics()["probe_budget_left"] == 0
+        clock["t"] += bermuda_tile.TILE_PROBE_BUDGET_SECS + 1   # the hour passes: the budget refills
+        for d in devices.values():
+            d.last_seen = clock["t"]
+        manager._request_probe(list(devices)[-1], nowstamp=clock["t"])
+        await asyncio.gather(*coord.hass.tasks)
+        assert len(asked) == bermuda_tile.TILE_PROBE_BUDGET + 1
+
+    asyncio.run(scenario())

@@ -33,6 +33,9 @@ not orphan the tag.
 from __future__ import annotations
 
 import asyncio
+import contextlib
+import os
+from collections import deque
 
 from typing import TYPE_CHECKING, Any
 
@@ -68,6 +71,19 @@ if TYPE_CHECKING:
 # their address - expose their Tile ID here. Older Tiles have no such
 # characteristic and never rotate, so their MAC stays their identity.
 TILE_ID_CHAR_UUID = "9d410007-35d6-f4dd-ba60-e7bd8dc491c0"
+# The Tiles in the field (2026) expose no such characteristic: the ID comes
+# over the MEP channel instead, as a connectionless TDI request - which
+# node-tile also does, first thing, before any authentication. Framing (all
+# from node-tile's sendPacketsPreAuth / ToaMepProcessor):
+#   request  -> MEP_CMD: 00 <4 random bytes> 13 02      (TOA_CMD_TDI, TDI read tile id)
+#   response <- MEP_RSP: 00 <those 4 bytes | ff ff ff ff> 14 02 <8-byte tile id>
+MEP_CMD_UUID = "9d410018-35d6-f4dd-ba60-e7bd8dc491c0"
+MEP_RSP_UUID = "9d410019-35d6-f4dd-ba60-e7bd8dc491c0"
+TOA_CMD_TDI = 0x13
+TOA_RSP_TDI = 0x14
+TDI_READ_TILE_ID = 0x02
+TDI_ERROR = 0x20
+TILE_TDI_TIMEOUT = 10.0  # seconds to wait for the TDI notification once connected
 TILE_PROBE_TIMEOUT = 45.0  # seconds for one connect + read (a busy C3 proxy can take a while)
 TILE_PROBE_RETRY_SECS = 120.0  # a transient (connect/read) failure is retried after this
 TILE_PROBE_UNAVAILABLE_RETRY_SECS = 60.0  # ...and "no connectable scanner hears it" after this
@@ -80,6 +96,16 @@ TILE_PROBE_MAX_AGE_SECS = 120.0
 # found the successor. Only identity can recover it (see _orphan_handover).
 TILE_ORPHAN_SECS = 300.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
+# A Tile changes its address right after every connection (observed: every
+# probe was followed within seconds by a fresh address with the same RSSI
+# pattern, 32 addresses in seven minutes). The address that appears where a
+# just-probed one went silent is the same Tile: it inherits that answer and
+# is NOT connected to again, or the loop would run forever.
+TILE_POST_PROBE_WINDOW = 20.0
+# Hard cap on connections, whatever the logic above thinks: probing is a
+# courtesy call on somebody's battery, never a background occupation.
+TILE_PROBE_BUDGET = 20
+TILE_PROBE_BUDGET_SECS = 3600.0
 
 
 class TileProbeUnavailable(Exception):
@@ -87,7 +113,38 @@ class TileProbeUnavailable(Exception):
 
 
 class TileNoIdCharacteristic(Exception):
-    """Connected, but the Tile exposes no Tile ID characteristic; str() lists what it does expose."""
+    """Connected, but the Tile exposes no way to read a Tile ID; str() lists what it does expose."""
+
+
+async def _read_uid_over_mep(client, timeout: float = TILE_TDI_TIMEOUT) -> str:
+    """The connectionless TDI "read tile id" exchange on the MEP characteristics.
+
+    Raises TileNoIdCharacteristic when the Tile answers with a TDI error (it
+    has no ID to give), asyncio.TimeoutError when it does not answer at all.
+    """
+    cid = os.urandom(4)
+    loop = asyncio.get_running_loop()
+    answer: asyncio.Future = loop.create_future()
+
+    def on_response(_sender, data) -> None:
+        b = bytes(data)
+        if len(b) < 7 or b[0] != 0 or (b[1:5] != cid and b[1:5] != b"\xff\xff\xff\xff") or b[5] != TOA_RSP_TDI:
+            return  # somebody else's channel, or not a TDI answer
+        if not answer.done():
+            answer.set_result(b[6:])
+
+    await client.start_notify(MEP_RSP_UUID, on_response)
+    try:
+        await client.write_gatt_char(MEP_CMD_UUID, bytes([0, *cid, TOA_CMD_TDI, TDI_READ_TILE_ID]), response=False)
+        payload = await asyncio.wait_for(answer, timeout)
+    finally:
+        with contextlib.suppress(Exception):
+            await client.stop_notify(MEP_RSP_UUID)
+    if not payload or payload[0] == TDI_ERROR:
+        raise TileNoIdCharacteristic(f"TDI error {payload[1] if len(payload) > 1 else '?'}: no Tile ID to read")
+    if payload[0] != TDI_READ_TILE_ID or len(payload) < 2:
+        raise TileNoIdCharacteristic(f"unexpected TDI answer {payload.hex()}")
+    return payload[1:].hex()
 
 
 async def async_read_tile_uid(hass, address: str) -> str | None:
@@ -107,15 +164,17 @@ async def async_read_tile_uid(hass, address: str) -> str | None:
     client = await establish_connection(BleakClientWithServiceCache, ble_device, f"Tile {address}", max_attempts=2)
     try:
         char = client.services.get_characteristic(TILE_ID_CHAR_UUID)
-        if char is None:
-            # What the Tile does expose, so a model that keeps its ID
-            # somewhere else can be recognised from the diagnostics.
-            seen = []
-            for service in client.services:
-                chars = ",".join(c.uuid[4:8] if c.uuid.endswith("-0000-1000-8000-00805f9b34fb") else c.uuid for c in service.characteristics)
-                seen.append(f"{service.uuid[4:8] if service.uuid.endswith('-0000-1000-8000-00805f9b34fb') else service.uuid}[{chars}]")
-            raise TileNoIdCharacteristic(" ".join(seen) or "no services")
-        return bytes(await client.read_gatt_char(char)).hex()
+        if char is not None:
+            return bytes(await client.read_gatt_char(char)).hex()
+        if client.services.get_characteristic(MEP_CMD_UUID) is not None and client.services.get_characteristic(MEP_RSP_UUID) is not None:
+            return await _read_uid_over_mep(client)
+        # What the Tile does expose, so a model that keeps its ID somewhere
+        # else can be recognised from the diagnostics.
+        seen = []
+        for service in client.services:
+            chars = ",".join(c.uuid[4:8] if c.uuid.endswith("-0000-1000-8000-00805f9b34fb") else c.uuid for c in service.characteristics)
+            seen.append(f"{service.uuid[4:8] if service.uuid.endswith('-0000-1000-8000-00805f9b34fb') else service.uuid}[{chars}]")
+        raise TileNoIdCharacteristic(" ".join(seen) or "no services")
     finally:
         await client.disconnect()
 
@@ -197,6 +256,8 @@ class BermudaTileManager:
         self._probe_fn = async_read_tile_uid
         self.probes = 0
         self.probe_failures = 0
+        self.probes_inherited = 0
+        self._connections: deque[float] = deque()  # stamps of connections started, for the budget
         self.last_probe: dict[str, Any] | None = None
         self._started: float | None = None  # first async_update stamp: scanners need a moment after a restart
 
@@ -445,6 +506,42 @@ class BermudaTileManager:
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
         return nowstamp - device.last_seen <= TILE_PROBE_MAX_AGE_SECS
 
+    def _inherit_answer(self, address: str) -> dict[str, Any] | None:
+        """The answer of a just-probed address this one continues, if any.
+
+        ``address`` inherits when it first appeared within TILE_POST_PROBE_WINDOW
+        of a definitive probe answer (an ID, or "no ID") and its first readings
+        match that address's last ones on enough shared scanners (the same
+        test the handover heuristic uses). Records and returns the inherited
+        answer, or None.
+        """
+        device = self._coordinator._get_device(address)
+        if device is None or not device.first_seen:
+            return None
+        best = None
+        for probed, result in self._probes.items():
+            if probed == address or result.get("error"):
+                continue
+            done = result["stamp"]
+            if not (done - 2.0 <= device.first_seen <= done + TILE_POST_PROBE_WINDOW):
+                continue
+            departed = self._coordinator._get_device(probed)
+            if departed is None:
+                continue
+            score = handover_score(departed, device)
+            if score is None or score[0] > TILE_RSSI_TOLERANCE:
+                continue
+            if best is None or score[0] < best[0]:
+                best = (score[0], probed, result)
+        if best is None:
+            return None
+        _score, probed, result = best
+        answer = {"uid": result.get("uid"), "error": None, "stamp": monotonic_time_coarse(), "inherited_from": probed}
+        self._probes[address] = answer
+        self.probes_inherited += 1
+        _LOGGER.debug("Tile %s continues %s (rotated after the probe): inheriting its answer", address, probed)
+        return answer
+
     def _could_be(self, tile_id: str, result: dict[str, Any] | None) -> bool:
         """Whether a probe answer leaves an address eligible as this Tile's successor."""
         if result is None or result.get("error"):
@@ -471,6 +568,22 @@ class BermudaTileManager:
             retry = TILE_PROBE_UNAVAILABLE_RETRY_SECS if result.get("error") == "unavailable" else TILE_PROBE_RETRY_SECS
             if monotonic_time_coarse() - result["stamp"] < retry:
                 return
+        inherited = self._inherit_answer(address)
+        if inherited is not None:
+            self._on_probe_result(address, inherited.get("uid"), learn_for)
+            return
+        now = monotonic_time_coarse()
+        while self._connections and now - self._connections[0] > TILE_PROBE_BUDGET_SECS:
+            self._connections.popleft()
+        if len(self._connections) >= TILE_PROBE_BUDGET:
+            if not getattr(self, "_budget_warned", False):
+                self._budget_warned = True
+                _LOGGER.warning(
+                    "Tile probes paused: %d connections in the last hour (budget %d)", len(self._connections), TILE_PROBE_BUDGET
+                )
+            return
+        self._budget_warned = False
+        self._connections.append(now)
         self._pending.add(address)
         self._queue.append((address, learn_for))
         if self._worker is None or self._worker.done():
@@ -569,10 +682,17 @@ class BermudaTileManager:
             "uids": self.uids,
             "probes": self.probes,
             "probe_failures": self.probe_failures,
+            "probes_inherited": self.probes_inherited,
+            "probe_budget_left": max(0, TILE_PROBE_BUDGET - sum(
+                1 for c in self._connections if monotonic_time_coarse() - c <= TILE_PROBE_BUDGET_SECS
+            )),
             "probes_pending": sorted(self._pending),
             "last_probe": self.last_probe,
             "probe_results": {
-                a: {"uid": r.get("uid"), "error": r.get("error"), "age": round(monotonic_time_coarse() - r["stamp"], 1)}
+                a: {
+                    "uid": r.get("uid"), "error": r.get("error"), "age": round(monotonic_time_coarse() - r["stamp"], 1),
+                    **({"inherited_from": r["inherited_from"]} if r.get("inherited_from") else {}),
+                }
                 for a, r in self._probes.items()
             },
             "bound_age": {
