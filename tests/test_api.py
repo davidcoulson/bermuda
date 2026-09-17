@@ -11,6 +11,7 @@ from custom_components.bermuda.api import (
     SNAPSHOT_VERSION,
     async_get_advert_snapshot,
     async_get_coordinator,
+    async_get_scanner_ranging,
 )
 from custom_components.bermuda.const import DOMAIN
 
@@ -507,3 +508,43 @@ def test_set_rssi_offsets_replace_mode_and_no_op_persist():
     assert async_set_rssi_offsets(
         SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda d: [])), {"x": 1}
     ) is None
+
+
+def test_scanner_ranging_lists_how_scanners_hear_each_other(monkeypatch):
+    import custom_components.bermuda.api as api_module
+    monkeypatch.setattr(api_module, "monotonic_time_coarse", lambda: 1000.0)
+    """Each scanner's own advert, as heard by its siblings: a labelled range
+    at a known position, without a full snapshot or a dump_devices call."""
+    heard_by_b = SimpleNamespace(scanner_address="bb:00:00:00:00:02", rssi_distance=4.0,
+                                 rssi_distance_raw=4.4, rssi=-70, stamp=990.0)
+    heard_by_self = SimpleNamespace(scanner_address="aa:00:00:00:00:01", rssi_distance=0.1,
+                                    rssi_distance_raw=0.1, rssi=-30, stamp=999.0)
+    stale = SimpleNamespace(scanner_address="cc:00:00:00:00:03", rssi_distance=9.0,
+                            rssi_distance_raw=9.5, rssi=-88, stamp=100.0)
+    scanner_a = SimpleNamespace(address="aa:00:00:00:00:01", adverts={
+        ("aa:00:00:00:00:01", "bb:00:00:00:00:02"): heard_by_b,
+        ("aa:00:00:00:00:01", "aa:00:00:00:00:01"): heard_by_self,
+        ("aa:00:00:00:00:01", "cc:00:00:00:00:03"): stale,
+    })
+    scanner_b = SimpleNamespace(address="bb:00:00:00:00:02", adverts={})
+    coordinator = SimpleNamespace(devices={}, get_scanners=[scanner_a, scanner_b])
+    hass = _make_hass(coordinator)
+
+    ranging = async_get_scanner_ranging(hass)
+    assert ranging["version"] == SNAPSHOT_VERSION
+    a = ranging["scanners"]["aa:00:00:00:00:01"]
+    assert set(a) == {"bb:00:00:00:00:02", "cc:00:00:00:00:03"}   # never itself
+    assert a["bb:00:00:00:00:02"]["distance"] == 4.0
+    assert a["bb:00:00:00:00:02"]["distance_raw"] == 4.4
+    assert a["bb:00:00:00:00:02"]["age"] is not None
+    assert ranging["scanners"]["bb:00:00:00:00:02"] == {}          # heard by nobody, still listed
+
+    fresh = async_get_scanner_ranging(hass, max_age=500.0)
+    assert set(fresh["scanners"]["aa:00:00:00:00:01"]) == {"bb:00:00:00:00:02"}
+
+
+def test_scanner_ranging_is_none_without_bermuda_and_advertised_as_a_feature():
+    from custom_components.bermuda.api import SNAPSHOT_FEATURES
+    hass = SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
+    assert async_get_scanner_ranging(hass) is None
+    assert "scanner_ranging" in SNAPSHOT_FEATURES

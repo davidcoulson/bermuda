@@ -59,7 +59,9 @@ SNAPSHOT_VERSION = 1
 #   rssi_offsets     async_get_rssi_offsets() / async_set_rssi_offsets(): read and
 #                    write Bermuda's per-scanner rssi offsets, applied live and
 #                    persisted without reloading the entry
-SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners", "rssi_history", "rssi_offsets"})
+SNAPSHOT_FEATURES = frozenset(
+    {"tracked_only", "tracked_devices", "scanners", "rssi_history", "rssi_offsets", "scanner_ranging"}
+)
 
 
 @callback
@@ -230,6 +232,67 @@ def async_get_scanners(hass: HomeAssistant) -> dict[str, Any] | None:
     if coordinator is None:
         return None
     return _scanner_entries(coordinator, monotonic_time_coarse(), _slug_memo())
+
+
+@callback
+def async_get_scanner_ranging(hass: HomeAssistant, max_age: float | None = None) -> dict[str, Any] | None:
+    """
+    Return how every scanner hears every OTHER scanner's own advertisement.
+
+    Proxies that advertise (an ESPHome iBeacon, a Shelly) are devices in the
+    coordinator like any other, so their adverts as heard by their siblings
+    are already measured - a labelled range at a known position, refreshed
+    for free. A consumer can turn those into reference fingerprints or into a
+    receiver calibration without taking a full snapshot (which serialises
+    every device in range) or calling the dump_devices service.
+
+    Shape::
+
+        {
+          "version": 1,
+          "stamp": <monotonic seconds>,
+          "scanners": {
+            "<tx scanner address>": {
+              "<rx scanner address>": {
+                "distance": float | None,   # Bermuda's filtered estimate (m)
+                "distance_raw": float | None,
+                "rssi": int | None,
+                "age": float | None,        # seconds since rx last heard tx
+              }, ...
+            }, ...
+          }
+        }
+
+    ``max_age`` drops pairs not heard within that many seconds. Scanners that
+    hear nobody, or that nobody hears, still appear with an empty map.
+    Returns None if Bermuda is not set up.
+    """
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    nowstamp = monotonic_time_coarse()
+    scanners: dict[str, Any] = {}
+    for scanner in getattr(coordinator, "get_scanners", None) or ():
+        address = getattr(scanner, "address", None)
+        if not address:
+            continue
+        heard_by: dict[str, Any] = {}
+        for advert in (getattr(scanner, "adverts", None) or {}).values():
+            rx = getattr(advert, "scanner_address", None)
+            if not rx or rx == address:
+                continue
+            stamp = getattr(advert, "stamp", None) or None
+            age = (nowstamp - stamp) if stamp else None
+            if max_age is not None and (age is None or age > max_age):
+                continue
+            heard_by[rx] = {
+                "distance": getattr(advert, "rssi_distance", None),
+                "distance_raw": getattr(advert, "rssi_distance_raw", None),
+                "rssi": getattr(advert, "rssi", None),
+                "age": age,
+            }
+        scanners[address] = heard_by
+    return {"version": SNAPSHOT_VERSION, "stamp": nowstamp, "scanners": scanners}
 
 
 @callback
