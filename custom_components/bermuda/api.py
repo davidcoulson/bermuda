@@ -72,6 +72,7 @@ SNAPSHOT_VERSION = 1
 #                    persisted without reloading the entry
 SNAPSHOT_FEATURES = frozenset(
     {
+        "tile_identity",
         "tracked_only",
         "tracked_devices",
         "scanners",
@@ -736,3 +737,27 @@ def async_get_advert_snapshot(
         # anyway does not need a second call for it.
         "scanners": _scanner_entries(coordinator, nowstamp, _cached_slug),
     }
+
+
+# --- Tile identity ----------------------------------------------------------
+
+
+def async_get_tile_identities(hass: HomeAssistant) -> dict[str, Any] | None:
+    """Every Tile ID Bermuda has read, with where that Tile is now (see
+    BermudaTileManager.identities). None if Bermuda is not set up."""
+    coordinator = async_get_coordinator(hass)
+    manager = getattr(coordinator, "tile_manager", None)
+    return None if manager is None else manager.identities()
+
+
+async def async_bind_tile(hass: HomeAssistant, tile_id: str, uid: str) -> dict[str, Any] | None:
+    """Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``
+    and bind its live address now if one is known. Raises ValueError for an
+    unknown Tile or an ID already declared as another Tile's. None if Bermuda
+    is not set up."""
+    coordinator = async_get_coordinator(hass)
+    manager = getattr(coordinator, "tile_manager", None)
+    if manager is None:
+        return None
+    address = manager.bind_by_uid(tile_id, uid)
+    return {"tile_id": tile_id.lower(), "uid": uid.lower(), "address": address}

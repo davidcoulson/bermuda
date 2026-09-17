@@ -88,3 +88,26 @@ set_options:
       example: '{"ref_power": -55, "attenuation": 3.0}'
       selector:
         object:
+
+bind_tile:
+  name: Bind Tile by ID
+  description: >-
+    Declare which Tile ID (as read over Bluetooth; see the Tile identities in
+    diagnostics or Sextant's Devices page) belongs to a configured Tile. The
+    ID is remembered so every later address rotation is resolved by identity,
+    and the live address carrying it is bound at once.
+  fields:
+    tile_id:
+      name: Tile
+      required: true
+      description: The configured Tile's metadevice id (TILE_<12 hex>).
+      example: "TILE_24D1093B0211"
+      selector:
+        text:
+    tile_uid:
+      name: Tile ID
+      required: true
+      description: The 16-hex-character Tile ID read from the tag.
+      example: "c5664f0155716298"
+      selector:
+        text:

@@ -139,6 +139,11 @@ functions in `api.py`, which Sextant uses) are the other:
 - `bermuda.list_device_candidates` — everything Bermuda hears that could be
   tracked but is not, with the `config_value` to use below (an address, or a
   Tile metadevice id such as `TILE_24D1093B0211`).
+- `bermuda.bind_tile` — declare which Tile ID (read from the tag; see the
+  Tile identities in diagnostics or Sextant's Devices page) belongs to a
+  configured Tile. Needed once for a Tile that was added by address and lost
+  across a rotation before its ID was read; from then on every rotation is
+  resolved by identity.
 - `bermuda.track_devices` with `add` / `remove` lists.
 - `bermuda.add_findmy_accessory` (exported key JSON, optional name) and
   `bermuda.remove_findmy_accessory` (its `findmy_` address).

@@ -95,6 +95,10 @@ TILE_PROBE_MAX_AGE_SECS = 120.0
 # an orphan: the Tile rotated while Bermuda was down, or the heuristic never
 # found the successor. Only identity can recover it (see _orphan_handover).
 TILE_ORPHAN_SECS = 300.0
+# An orphan sweep (every live unbound Tile asked for its ID) runs at most
+# this often per Tile: with the ID unknown a second pass teaches nothing,
+# and each connection rotates somebody's address.
+TILE_ORPHAN_SWEEP_SECS = 900.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 # A Tile changes its address right after every connection (observed: every
 # probe was followed within seconds by a fresh address with the same RSSI
@@ -260,6 +264,7 @@ class BermudaTileManager:
         self._connections: deque[float] = deque()  # stamps of connections started, for the budget
         self.last_probe: dict[str, Any] | None = None
         self._started: float | None = None  # first async_update stamp: scanners need a moment after a restart
+        self._orphan_sweep_at: dict[str, float] = {}
 
     # --- persistence ---------------------------------------------------------
 
@@ -373,6 +378,17 @@ class BermudaTileManager:
             return False  # give the scanners a moment after a restart before declaring it gone
         taken = self.bound_sources()
         uid = self.uids.get(tile_id)
+        # An answer already in hand (read, inherited, or declared by the user) settles it without a sweep.
+        if uid:
+            for address, result in self._probes.items():
+                if result.get("uid") == uid and address not in taken \
+                        and self._probe_possible(self._coordinator._get_device(address), nowstamp):
+                    self.bind(tile_id, address, reason="tile id (recovered)")
+                    return True
+        last = self._orphan_sweep_at.get(tile_id)
+        if last is not None and nowstamp - last < TILE_ORPHAN_SWEEP_SECS:
+            return False
+        self._orphan_sweep_at[tile_id] = nowstamp
         for device in list(self._coordinator.devices.values()):
             if (
                 not getattr(device, "is_tile", False)
@@ -387,6 +403,77 @@ class BermudaTileManager:
                 self.bind(tile_id, device.address, reason="tile id (recovered)")
                 return True
         return False
+
+    def identities(self) -> dict[str, dict[str, Any]]:
+        """Every Tile ID read so far and where that Tile is now.
+
+        ``{uid: {"uid", "addresses", "last_seen_age", "area_name", "strongest",
+        "tile_id"}}`` - addresses that answered (or inherited) this ID, the
+        freshest one's age, area and loudest scanner, and the configured Tile
+        the ID belongs to, if declared.
+        """
+        now = monotonic_time_coarse()
+        uid_to_tile = {known: tile_id for tile_id, known in self.uids.items() if known}
+        out: dict[str, dict[str, Any]] = {}
+        for address, result in self._probes.items():
+            uid = result.get("uid")
+            if not uid:
+                continue
+            entry = out.setdefault(uid, {
+                "uid": uid, "addresses": [], "last_seen_age": None, "area_name": None, "strongest": None,
+                "tile_id": uid_to_tile.get(uid),
+            })
+            entry["addresses"].append(address)
+            device = self._coordinator._get_device(address)
+            last_seen = getattr(device, "last_seen", None) if device is not None else None
+            if not last_seen:
+                continue
+            age = round(now - last_seen, 1)
+            if entry["last_seen_age"] is not None and age >= entry["last_seen_age"]:
+                continue
+            entry["last_seen_age"] = age
+            entry["area_name"] = getattr(device, "area_name", None)
+            best = None
+            for advert in (getattr(device, "adverts", None) or {}).values():
+                rssi = getattr(advert, "rssi", None)
+                if rssi is not None and (best is None or rssi > best[0]):
+                    best = (rssi, getattr(advert, "name", None) or getattr(advert, "scanner_address", None))
+            entry["strongest"] = None if best is None else {"scanner": best[1], "rssi": best[0]}
+        return out
+
+    def bind_by_uid(self, tile_id: str, uid: str) -> str | None:
+        """Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``.
+
+        The user is the one who knows which of the IDs in the house is the
+        Tile on the kitchen keys. The ID is remembered, so every later
+        rotation is resolved by identity, and the freshest live address that
+        answered with it (if any) is bound now. Returns that address, or
+        None. Raises ValueError for an unknown Tile or an ID already declared
+        as another Tile's.
+        """
+        tile_id, uid = tile_id.lower(), uid.lower()
+        configured = {str(a).lower() for a in self._coordinator.options.get(CONF_DEVICES, [])}
+        if tile_id not in configured and tile_id not in self.bindings:
+            raise ValueError(f"{tile_id} is not a configured Tile")
+        for other, known in self.uids.items():
+            if known == uid and other != tile_id:
+                raise ValueError(f"Tile ID {uid} is already declared as {other}")
+        self.uids[tile_id] = uid
+        self.bindings.setdefault(tile_id, [])
+        best = None
+        for address, result in self._probes.items():
+            if result.get("uid") != uid:
+                continue
+            device = self._coordinator._get_device(address)
+            last_seen = getattr(device, "last_seen", None) if device is not None else None
+            if last_seen and (best is None or last_seen > best[0]):
+                best = (last_seen, address)
+        self._schedule_save()
+        if best is None:
+            _LOGGER.info("Tile %s declared as Tile ID %s; no live address carries it yet", tile_id, uid)
+            return None
+        self.bind(tile_id, best[1], reason="tile id (user)")
+        return best[1]
 
     def _maybe_handover(self, metadevice: BermudaDevice, tile_id: str, nowstamp: float) -> bool:
         coordinator = self._coordinator

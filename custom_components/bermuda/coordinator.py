@@ -354,6 +354,13 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             vol.Schema({vol.Required("options"): dict}),
             SupportsResponse.OPTIONAL,
         )
+        hass.services.async_register(
+            DOMAIN,
+            "bind_tile",
+            self.service_bind_tile,
+            vol.Schema({vol.Required("tile_id"): cv.string, vol.Required("tile_uid"): cv.string}),
+            SupportsResponse.OPTIONAL,
+        )
 
         # Register the dump_devices service
         hass.services.async_register(
@@ -1952,6 +1959,15 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
         return {"options": options or {}}
+
+    async def service_bind_tile(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        try:
+            bound = await api.async_bind_tile(self.hass, call.data["tile_id"], call.data["tile_uid"])
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        return bound or {}
 
     async def service_dump_devices(self, call: ServiceCall) -> ServiceResponse:  # pylint: disable=unused-argument;
         """Return a dump of beacon advertisements by receiver."""

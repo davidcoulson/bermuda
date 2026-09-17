@@ -723,3 +723,86 @@ def test_the_connection_budget_caps_probing(monkeypatch):
         assert len(asked) == bermuda_tile.TILE_PROBE_BUDGET + 1
 
     asyncio.run(scenario())
+
+
+# --- identities, binding by ID, sweep pacing ---------------------------------- #
+
+
+def test_identities_and_bind_by_uid(monkeypatch):
+    async def scenario():
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
+        now = clock["t"]
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+
+        async def probe(hass, address):
+            return {b.address: "beef02", c.address: "cafe01"}[address]
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)
+        later = now + bermuda_tile.TILE_SILENT_SECS + 1
+        clock["t"] = later
+        b.last_seen = c.last_seen = later
+        manager.async_update(nowstamp=later)          # orphan sweep: both asked
+        await asyncio.gather(*coord.hass.tasks)
+        ids = manager.identities()
+        assert set(ids) == {"beef02", "cafe01"}
+        assert ids["cafe01"]["addresses"] == [c.address] and ids["cafe01"]["tile_id"] is None
+        assert ids["cafe01"]["strongest"]["scanner"] == "s2"   # C is loudest on s2 (-60)
+        assert ids["beef02"]["strongest"]["scanner"] == "s1"
+        # The user says: my Tile is cafe01.
+        assert manager.bind_by_uid(tile_id.upper(), "CAFE01") == c.address
+        assert manager.bindings[tile_id][0] == c.address and manager.uids[tile_id] == "cafe01"
+        assert manager.last_handover["reason"] == "tile id (user)"
+        assert manager.identities()["cafe01"]["tile_id"] == tile_id
+        with pytest.raises(ValueError):
+            manager.bind_by_uid("tile_000000000000", "cafe01")   # not a configured Tile
+        other = "tile_aaaaaaaaaaaa"
+        coord.options[CONF_DEVICES].append(other.upper())
+        with pytest.raises(ValueError):
+            manager.bind_by_uid(other, "cafe01")                # already declared as ours
+        assert manager.bind_by_uid(other, "deadbeef00000000") is None   # remembered, nothing live carries it
+
+    asyncio.run(scenario())
+
+
+def test_orphan_sweeps_are_paced():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({b.address: b}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        asked = []
+
+        async def probe(hass, address):
+            asked.append(address)
+            return "beef02"
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)
+        t1 = now + bermuda_tile.TILE_SILENT_SECS + 1
+        b.last_seen = t1
+        manager.async_update(nowstamp=t1)               # first sweep asks B
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [b.address]
+        coord.devices[c.address] = c                    # a new Tile shows up a minute later
+        t2 = t1 + 60
+        b.last_seen = c.last_seen = t2
+        manager.async_update(nowstamp=t2)
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [b.address]                     # not asked: the sweep ran a minute ago
+        t3 = t1 + bermuda_tile.TILE_ORPHAN_SWEEP_SECS + 1
+        b.last_seen = c.last_seen = t3
+        manager.async_update(nowstamp=t3)
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [b.address, c.address]          # next pass: only the unanswered one
+
+    asyncio.run(scenario())
