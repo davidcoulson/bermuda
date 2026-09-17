@@ -21,6 +21,7 @@ from .const import (
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
     CONF_CREATE_SCANNER_ENTITIES,
     DEFAULT_CREATE_SCANNER_ENTITIES,
+    METADEVICE_DEVICETYPES,
     SIGNAL_DEVICE_NEW,
     SIGNAL_SCANNERS_CHANGED,
 )
@@ -236,10 +237,7 @@ class BermudaSensor(BermudaEntity, SensorEntity):
         # By default, it's the device's MAC
         current_mac = self._device.address
         # But metadevices have source_devices
-        if self._device.address_type in [
-            ADDR_TYPE_IBEACON,
-            ADDR_TYPE_PRIVATE_BLE_DEVICE,
-        ]:
+        if self._device.metadevice_type & METADEVICE_DEVICETYPES:
             # Check the current sources and find the latest
             current_mac: str = STATE_UNAVAILABLE
             _best_stamp = 0

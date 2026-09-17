@@ -6,7 +6,7 @@ import re
 from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import TYPE_CHECKING, cast
+from typing import TYPE_CHECKING, Any, cast
 
 import aiofiles
 import voluptuous as vol
@@ -44,20 +44,24 @@ from homeassistant.helpers import (
 from homeassistant.helpers import (
     issue_registry as ir,
 )
+from homeassistant.helpers.debounce import Debouncer
 from homeassistant.helpers.device_registry import (
     EVENT_DEVICE_REGISTRY_UPDATED,
     EventDeviceRegistryUpdatedData,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import get_age, now
 
 from .bermuda_device import BermudaDevice
+from .bermuda_findmy import BermudaFindMyManager, FindMyKeyError, FindMyMacMatch, parse_findmy_datetime
 from .bermuda_irk import BermudaIrkManager
 from .bermuda_tile import BermudaTileManager
 from .const import (
     _LOGGER,
     _LOGGER_SPAM_LESS,
+    ADDR_TYPE_FINDMY,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
     AREA_MAX_AD_AGE,
     BDADDR_TYPE_NOT_MAC48,
@@ -71,6 +75,7 @@ from .const import (
     CONF_RSSI_OFFSETS,
     CONF_SMOOTHING_SAMPLES,
     CONF_UPDATE_INTERVAL,
+    CONFDATA_FINDMY,
     DEFAULT_ATTENUATION,
     DEFAULT_DEVTRACK_TIMEOUT,
     DEFAULT_MAX_RADIUS,
@@ -80,7 +85,11 @@ from .const import (
     DEFAULT_UPDATE_INTERVAL,
     DOMAIN,
     DOMAIN_PRIVATE_BLE_DEVICE,
+    FINDMY_STORAGE_KEY,
+    FINDMY_STORAGE_SAVE_DELAY,
+    FINDMY_STORAGE_VERSION,
     METADEVICE_IBEACON_DEVICE,
+    METADEVICE_TYPE_FINDMY_SOURCE,
     METADEVICE_TYPE_IBEACON_SOURCE,
     METADEVICE_TYPE_PRIVATE_BLE_SOURCE,
     PRUNE_MAX_COUNT,
@@ -114,6 +123,10 @@ Cancellable = Callable[[], None]
 # so we're just disabling it for the whole file.
 # https://github.com/astral-sh/ruff/issues/4244
 # ruff: noqa: PLR1730
+
+
+# A MAC-48 in the colon-separated form HA uses for CONNECTION_BLUETOOTH.
+MAC_ADDRESS_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 
 
 class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
@@ -191,6 +204,32 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         self._scanners: set[BermudaDevice] = set()  # Set of all in self.devices that is_scanner=True
         self.irk_manager = BermudaIrkManager()
         self.tile_manager = BermudaTileManager(self)
+        self.findmy_manager = BermudaFindMyManager()
+        self.findmy_manager.load(entry.data.get(CONFDATA_FINDMY, []))
+        # Guards against launching overlapping table rebuilds in the executor.
+        self._findmy_rebuild_running: bool = False
+        # Building the table before the stored alignment lands would search the
+        # full unaligned window - seconds of curve operations - and be thrown away
+        # moments later.
+        self._findmy_alignment_loaded: bool = not self.findmy_manager.accessories
+        # Alignment lives in its own Store. Writing it to the config entry would
+        # trip the update listener and reload the integration on every sighting.
+        self._findmy_store: Store[dict[str, Any]] = Store(hass, FINDMY_STORAGE_VERSION, FINDMY_STORAGE_KEY)
+        # Alignment changes on essentially every sighting, so the writes are
+        # coalesced. A Debouncer rather than Store.async_delay_save: the latter
+        # pushes its timer forward on every call, so a tag that stays in view
+        # starves the write indefinitely and the file on disk goes hours stale.
+        self._findmy_alignment_debouncer = Debouncer(
+            hass,
+            _LOGGER,
+            cooldown=FINDMY_STORAGE_SAVE_DELAY,
+            immediate=False,
+            function=self.async_flush_findmy_alignment,
+        )
+        if self.findmy_manager.accessories:
+            entry.async_create_background_task(
+                hass, self.async_load_findmy_alignment(), "Load FindMy alignment", eager_start=True
+            )
 
         self.ar = ar.async_get(self.hass)
         self.er = er.async_get(self.hass)
@@ -701,6 +740,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         try:  # so we can still clean up update_in_progress
             nowstamp = monotonic_time_coarse()
 
+            # Roll the FindMy address table forward if it has aged out. This is
+            # dispatched to a background task, so it does not gate the adverts we
+            # are about to consume - a rotation is still matched immediately
+            # because FINDMY_LOOKAHEAD_INDICES puts the upcoming addresses in the
+            # table before the accessory switches to them.
+            # (getattr: tests drive this loop on lightweight coordinator stubs.)
+            refresh_findmy = getattr(self, "_async_refresh_findmy_table", None)
+            if refresh_findmy is not None:
+                refresh_findmy()
+
             # The main "get all adverts from the backend" part.
             result_gather_adverts = self._async_gather_advert_data()
 
@@ -822,6 +871,12 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
                 device = self._get_or_create_device(bledevice.address)
                 device.process_advertisement(scanner_device, advertisementdata)
+
+                # FindMy accessories rotate their MAC on a key schedule, so we check
+                # each address against the precomputed table of addresses our
+                # configured accessories could currently be using.
+                if findmy_match := self.findmy_manager.check_mac(device.address):
+                    self.register_findmy_source(device, findmy_match)
 
         # end of for ha_scanner loop
         return True
@@ -1100,6 +1155,166 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                                 "No address available for PB Device %s",
                                 pb_entity.entity_id,
                             )
+
+    def register_findmy_source(self, source_device: BermudaDevice, match: FindMyMacMatch) -> None:
+        """
+        Create or update the meta-device tracking a FindMy accessory.
+
+        Called each time an advertisement arrives from an address that matches one
+        of our configured accessories' key schedules. That happens on every advert,
+        not just on rotation, so this must stay cheap for the already-known case.
+        """
+        metadevice = self._get_or_create_device(match.accessory_id)
+
+        if len(metadevice.metadevice_sources) == 0:
+            # ##### NEW METADEVICE #####
+            if metadevice.address not in self.metadevices:
+                self.metadevices[metadevice.address] = metadevice
+            accessory = self.findmy_manager.accessories.get(match.accessory_id)
+            if accessory is not None:
+                metadevice.name_bt_local_name = metadevice.name_bt_local_name or accessory.friendly_name
+                metadevice.make_name()
+            # The user explicitly configured this accessory, so always give it sensors.
+            metadevice.create_sensor = True
+
+        source_device.metadevice_type.add(METADEVICE_TYPE_FINDMY_SOURCE)
+
+        if source_device.address not in metadevice.metadevice_sources:
+            # A new MAC for this accessory - most recent goes first, matching the
+            # convention pruning relies on.
+            metadevice.metadevice_sources.insert(0, source_device.address)
+            _LOGGER.debug(
+                "FindMy %s rotated to %s (index %d)",
+                metadevice.name,
+                source_device.address,
+                match.index,
+            )
+
+        # Record the sighting so the accessory's search window collapses to the
+        # indices around where it actually is.
+        if self.findmy_manager.note_sighting(match):
+            self._findmy_alignment_debouncer.async_schedule_call()
+
+    def _async_refresh_findmy_table(self) -> None:
+        """
+        Rebuild the FindMy MAC lookup table if it has aged out.
+
+        A cold build (an accessory we have never sighted, so a 30 day search window)
+        costs seconds of CPU, so it always goes to an executor. Once alignment is
+        established the window is a handful of indices and it is trivial, but we
+        keep it off the loop regardless for predictability.
+        """
+        if self._findmy_rebuild_running or not self._findmy_alignment_loaded:
+            return
+        if not self.findmy_manager.needs_refresh():
+            return
+
+        self._findmy_rebuild_running = True
+
+        async def _rebuild() -> None:
+            try:
+                await self.hass.async_add_executor_job(self.findmy_manager.build_table)
+            except Exception:  # noqa: BLE001
+                _LOGGER.exception("Failed to rebuild FindMy MAC table")
+            finally:
+                self._findmy_rebuild_running = False
+
+        self.config_entry.async_create_background_task(self.hass, _rebuild(), "Bermuda FindMy table rebuild")
+
+    @callback
+    def async_purge_invalid_bluetooth_connections(self) -> int:
+        """
+        Drop device-registry connections that claim to be a MAC but are not.
+
+        Metadevices have no bluetooth address, so a version of this integration
+        that let them fall through to the generic CONNECTION_BLUETOOTH branch
+        registered their metadevice id as though it were one. Device registry
+        connections *merge* on update, so simply emitting the right tuple does
+        not displace the wrong one - it has to be removed. Connections are how HA
+        matches devices across integrations, so a malformed one risks colliding
+        with a real device.
+
+        Returns the number of devices cleaned, for logging and tests.
+        """
+        cleaned = 0
+        for device in dr.async_entries_for_config_entry(self.dr, self.config_entry.entry_id):
+            bogus = {
+                conn
+                for conn in device.connections
+                if conn[0] == dr.CONNECTION_BLUETOOTH and not MAC_ADDRESS_RE.match(conn[1])
+            }
+            if not bogus:
+                continue
+            _LOGGER.debug("Removing %d malformed bluetooth connection(s) from %s", len(bogus), device.name)
+            self.dr.async_update_device(device.id, new_connections=device.connections - bogus)
+            cleaned += 1
+        if cleaned:
+            _LOGGER.info("Cleaned malformed bluetooth connections from %d device(s)", cleaned)
+        return cleaned
+
+    async def async_load_findmy_alignment(self) -> None:
+        """
+        Restore saved alignment for our accessories.
+
+        Alignment is what keeps the key search window small, so losing it means
+        paying the expensive cold table build again on the next start.
+        """
+        try:
+            stored = await self._findmy_store.async_load()
+        finally:
+            # Even on failure, unblock the rebuild - a wide window beats none.
+            self._findmy_alignment_loaded = True
+        if not stored:
+            return
+        restored = 0
+        for address, state in stored.items():
+            accessory = self.findmy_manager.accessories.get(address)
+            if accessory is None:
+                continue
+            try:
+                seen_at = parse_findmy_datetime(state["alignment_date"])
+            except (KeyError, FindMyKeyError):
+                _LOGGER.debug("Skipping unreadable stored alignment for %s", address)
+                continue
+            if accessory.update_alignment(seen_at, state.get("alignment_index", 0)):
+                restored += 1
+        _LOGGER.debug("Restored FindMy alignment for %d accessories", restored)
+
+    def _findmy_alignment_data(self) -> dict[str, Any]:
+        """Build the alignment payload for the Store (no key material)."""
+        return {
+            acc.address: {
+                "alignment_index": acc.alignment_index,
+                "alignment_date": acc.alignment_date.isoformat(),
+            }
+            for acc in self.findmy_manager.accessories.values()
+        }
+
+    async def async_save_findmy_alignment(self) -> None:
+        """
+        Write the alignment Store now, whatever the accessory list looks like.
+
+        Unlike the flush below this saves an empty payload too, which is exactly
+        what the removal path needs: dropping the last accessory must clear its
+        index out of .storage rather than leave it there forever.
+        """
+        await self._findmy_store.async_save(self._findmy_alignment_data())
+
+    async def async_flush_findmy_alignment(self) -> None:
+        """
+        Write alignment immediately, for unload and reload.
+
+        The delayed save is only flushed by Home Assistant's final-write on a full
+        stop. On an entry unload or reload there may be nothing queued at all -
+        the throttle means a dirty alignment can be waiting without a pending
+        write - so anything learned since the last queued save would be lost.
+
+        Nothing to flush when no accessory is configured, and writing then would
+        create the Store for an install that never uses FindMy.
+        """
+        if not self.findmy_manager.accessories:
+            return
+        await self.async_save_findmy_alignment()
 
     def register_ibeacon_source(self, source_device: BermudaDevice):
         """
@@ -1737,6 +1952,11 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 i += 1
                 if device.address_type == ADDR_TYPE_PRIVATE_BLE_DEVICE:
                     self.redactions[address] = f"{address[:4]}::IRK_DEV_{i}"
+                elif device.address_type == ADDR_TYPE_FINDMY:
+                    # Must be redacted explicitly: a findmy_ address matches none of
+                    # the branches below, and the catch-all echoes the address back
+                    # verbatim, which would defeat the point for a user-supplied id.
+                    self.redactions[address] = f"{address[:11]}::FINDMY_DEV_{i}"
                 elif address.count("_") == 2:
                     self.redactions[address] = f"{address[:4]}::OTHER_iBea_{i}::{address[32:]}"
                     # Raw uuid in advert

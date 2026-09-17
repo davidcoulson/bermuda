@@ -105,6 +105,19 @@ the wrong tag. Bindings persist across restarts. Diagnostics also carry a raw
 capture of every Tile address heard (address class, RSSI and payload history
 per scanner) for tuning the heuristic against real data.
 
+## Apple FindMy accessories (this fork)
+
+Merged from [Megarushing/bermuda](https://github.com/Megarushing/bermuda):
+AirTags and licensed FindMy tags rotate their address every 15 minutes on a
+key schedule seeded at pairing. Given the accessory's pairing keys (exported
+with the FindMy.py library's `FindMyAccessory.to_json()` — see that
+project's key-extraction guide), Bermuda derives the addresses the tag can
+currently be using and tracks it as a `findmy_<id>` metadevice, exactly like
+an IRK device. Configure under **Bermuda → Configure → FindMy Accessories**.
+Key material lives in the config entry; alignment state lives in its own
+store so sightings never trigger a reload. Treat diagnostics and backups
+accordingly.
+
 ## FAQ
 
 See [The FAQ](https://github.com/agittins/bermuda/wiki/FAQ) in the Wiki!

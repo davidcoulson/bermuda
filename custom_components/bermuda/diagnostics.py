@@ -30,6 +30,7 @@ async def async_get_config_entry_diagnostics(hass: HomeAssistant, entry: Bermuda
         "active_devices": f"{coordinator.count_active_devices()}/{len(coordinator.devices)}",
         "active_scanners": f"{coordinator.count_active_scanners()}/{len(coordinator.scanner_list)}",
         "irk_manager": coordinator.redact_data(coordinator.irk_manager.async_diagnostics_no_redactions()),
+        "findmy_manager": coordinator.redact_data(coordinator.findmy_manager.async_diagnostics_no_redactions()),
         "devices": await coordinator.service_dump_devices(call),
         # Tile trackers: bindings and the raw capture (address class, RSSI
         # and payload history per scanner) that the rotation heuristic is

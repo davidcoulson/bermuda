@@ -21,7 +21,8 @@
     "error": {
       "some_active": "You have at least some active devices, this is good.",
       "no_scanners": "You need to configure some bluetooth scanners before Bermuda will have anything to work with. \nAny one of esphome bluetooth_proxy, Shelly bluetooth proxy or local bluetooth adaptor should get you started.",
-      "no_devices": "No bluetooth devices are actively being reported from your scanners. \nYou will need to solve this before Bermuda can be of much help."
+      "no_devices": "No bluetooth devices are actively being reported from your scanners. \nYou will need to solve this before Bermuda can be of much help.",
+      "findmy_invalid": "Could not read that accessory JSON: {error_detail}"
     },
     "step": {
       "init": {
@@ -82,6 +83,28 @@
         },
         "data_description": {
           "scanner_info": "Leave at zero to accept the global default, or enter a non-zero number to offset the rssi reported by that scanner. Adjust until the estimated distance above matches the actual distance between that scanner and the selected transmitting device. Negative values will increase the distance, positive values will decrease it."
+        }
+      },
+      "findmy": {
+        "title": "FindMy Accessories",
+        "description": "Find My tags rotate their bluetooth address every 15 minutes, so they cannot be picked from the device list. Bermuda derives the addresses from each accessory's keys instead.\n{accessories}",
+        "data": {
+          "action": "Action"
+        }
+      },
+      "findmy_add": {
+        "title": "Add FindMy Accessory",
+        "description": "Paste one accessory's JSON export below. It must contain `master_key`, `skn`, `sks` and `paired_at`. Include the alignment plist when converting, or Bermuda has to search a 30 day window before it locks on.\n\n**Extracting keys** — [FindMy.py, Step 1](https://docs.mikealmel.ooo/FindMy.py/getstarted/02-fetching.html):\n\n| macOS | Method |\n|---|---|\n| 14 and earlier | `python3 -m findmy decrypt --out-dir devices/` |\n| 15 | BeaconStoreKey extractor, then `plist_to_json.py` |\n| 26 | No known method |\n\n⚠️ **This JSON is the accessory's location secret.** Anyone who copies it can track this tag indefinitely, and it is stored unencrypted in Home Assistant backups.\n\n{error_detail}",
+        "data": {
+          "accessory_json": "Accessory JSON",
+          "name": "Name (optional, overrides the name in the JSON)"
+        }
+      },
+      "findmy_remove": {
+        "title": "Remove FindMy Accessory",
+        "description": "Select accessories to remove. This deletes their stored key material.",
+        "data": {
+          "remove": "Accessories to remove"
         }
       }
     }
