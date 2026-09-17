@@ -69,7 +69,12 @@ if TYPE_CHECKING:
 # characteristic and never rotate, so their MAC stays their identity.
 TILE_ID_CHAR_UUID = "9d410007-35d6-f4dd-ba60-e7bd8dc491c0"
 TILE_PROBE_TIMEOUT = 45.0  # seconds for one connect + read (a busy C3 proxy can take a while)
-TILE_PROBE_RETRY_SECS = 300.0  # a transient failure is retried after this
+TILE_PROBE_RETRY_SECS = 120.0  # a transient (connect/read) failure is retried after this
+TILE_PROBE_UNAVAILABLE_RETRY_SECS = 60.0  # ...and "no connectable scanner hears it" after this
+# An address not heard for longer than this cannot be connected to (the
+# Bluetooth manager drops it, and a rotated Tile is simply gone); probing
+# it only burns a proxy slot for TILE_PROBE_TIMEOUT.
+TILE_PROBE_MAX_AGE_SECS = 120.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 
 
@@ -251,7 +256,14 @@ class BermudaTileManager:
             # once; a rotation is then resolved by reading the successor's.
             sources = self.bindings.get(tile_id) or []
             if sources and tile_id not in self.uids:
-                self._request_probe(sources[0], learn_for=tile_id)
+                known = self._probes.get(sources[0])
+                if known and not known.get("error") and known.get("uid"):
+                    # Already read (as a handover candidate): that answer is this Tile's ID.
+                    self.uids[tile_id] = known["uid"]
+                    dirty = True
+                    _LOGGER.info("Tile %s identified: Tile ID %s", tile_id, known["uid"])
+                else:
+                    self._request_probe(sources[0], learn_for=tile_id, nowstamp=nowstamp)
             sources = self.bindings.setdefault(tile_id, [])
             if not sources:
                 seed = mac_from_tile_id(tile_id)
@@ -306,31 +318,37 @@ class BermudaTileManager:
         # a successor) drops out of the heuristic below; while probes are
         # still pending or retryable nothing is decided yet.
         uid = self.uids.get(tile_id)
-        if uid and self._can_probe():
+        if self._can_probe():
             ordered = sorted(candidates, key=lambda d: -(d.last_seen or 0))
-            for candidate in ordered:
-                result = self._probes.get(candidate.address)
-                if result is not None and result.get("uid") == uid:
-                    self.bind(tile_id, candidate.address, reason="tile id")
-                    return True
+            if uid:
+                for candidate in ordered:
+                    result = self._probes.get(candidate.address)
+                    if result is not None and result.get("uid") == uid:
+                        self.bind(tile_id, candidate.address, reason="tile id")
+                        return True
+            # Ask every candidate that can still be reached, whether or not
+            # this Tile's own ID is known yet: a candidate that answers with
+            # NO ID characteristic does not rotate and cannot be a successor,
+            # one that answers with another Tile's ID is that Tile, and the
+            # answer of whichever candidate the heuristic then picks becomes
+            # this Tile's ID (learned by inheritance, see below). Waiting only
+            # happens while a probe is pending or still possible - a Tile
+            # whose bound address rotated away before its ID was ever read
+            # must not wait forever for a probe that can never run.
             undecided = False
             for candidate in ordered:
-                self._request_probe(candidate.address)
+                self._request_probe(candidate.address, nowstamp=nowstamp)
                 result = self._probes.get(candidate.address)
-                if candidate.address in self._pending or result is None:
+                if candidate.address in self._pending:
                     undecided = True
+                elif result is None:
+                    if self._probe_possible(candidate, nowstamp):
+                        undecided = True
                 elif result.get("error") and result.get("error") != "unavailable":
                     undecided = True  # transient failure: retried after TILE_PROBE_RETRY_SECS
             if undecided:
                 return False
-            # Every candidate answered, none is ours (or none could be
-            # reached): only Tiles nobody could read stay in the heuristic.
-            candidates = [
-                c for c in candidates
-                if (r := self._probes.get(c.address)) is None or r.get("error") == "unavailable"
-            ]
-        elif self._can_probe() and tile_id not in self.uids:
-            return False  # still learning the bound address's id: wait for it
+            candidates = [c for c in candidates if self._could_be(tile_id, self._probes.get(c.address))]
         scored = []
         for candidate in candidates:
             score = handover_score(bound, candidate)
@@ -361,6 +379,12 @@ class BermudaTileManager:
                 scored[1][0],
             )
             return True  # counters changed
+        # The successor answered a probe with an ID this Tile did not have yet:
+        # that is its ID (learned by inheritance), so the next rotation is
+        # resolved by identity instead of by RSSI pattern.
+        if not self.uids.get(tile_id) and (r := self._probes.get(best.address)) and r.get("uid"):
+            self.uids[tile_id] = r["uid"]
+            _LOGGER.info("Tile %s identified through its successor %s: Tile ID %s", tile_id, best.address, r["uid"])
         self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern")
         # It rotated, so it IS a Private-ID Tile: a "no ID characteristic"
         # answer was wrong (or read from a stale service cache). Forget it so
@@ -375,18 +399,38 @@ class BermudaTileManager:
     def _can_probe(self) -> bool:
         return self._hass is not None
 
-    def _request_probe(self, address: str, learn_for: str | None = None) -> None:
-        """Queue a Tile ID read for ``address`` unless one is pending or already answered."""
+    def _probe_possible(self, device: BermudaDevice | None, nowstamp: float | None = None) -> bool:
+        """Whether ``device`` was heard recently enough for a connection to be attempted."""
+        if device is None or not device.last_seen:
+            return False
+        nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
+        return nowstamp - device.last_seen <= TILE_PROBE_MAX_AGE_SECS
+
+    def _could_be(self, tile_id: str, result: dict[str, Any] | None) -> bool:
+        """Whether a probe answer leaves an address eligible as this Tile's successor."""
+        if result is None or result.get("error"):
+            return True  # never asked, or could not be asked: the heuristic decides
+        if not result.get("uid"):
+            return False  # answered with no ID characteristic: it does not rotate
+        uid = self.uids.get(tile_id)
+        return not uid or result["uid"] == uid
+
+    def _request_probe(self, address: str, learn_for: str | None = None, nowstamp: float | None = None) -> None:
+        """Queue a Tile ID read for ``address`` unless one is pending, already
+        answered, or the address is no longer heard (nothing to connect to)."""
         if not self._can_probe():
             return
         address = address.lower()
         if address in self._pending or any(a == address for a, _ in self._queue):
             return
+        if not self._probe_possible(self._coordinator._get_device(address), nowstamp):
+            return
         result = self._probes.get(address)
         if result is not None:
             if result.get("error") is None:
                 return  # definitive answer
-            if monotonic_time_coarse() - result["stamp"] < TILE_PROBE_RETRY_SECS:
+            retry = TILE_PROBE_UNAVAILABLE_RETRY_SECS if result.get("error") == "unavailable" else TILE_PROBE_RETRY_SECS
+            if monotonic_time_coarse() - result["stamp"] < retry:
                 return
         self._pending.add(address)
         self._queue.append((address, learn_for))
@@ -488,6 +532,17 @@ class BermudaTileManager:
             "probe_failures": self.probe_failures,
             "probes_pending": sorted(self._pending),
             "last_probe": self.last_probe,
+            "probe_results": {
+                a: {"uid": r.get("uid"), "error": r.get("error"), "age": round(monotonic_time_coarse() - r["stamp"], 1)}
+                for a, r in self._probes.items()
+            },
+            "bound_age": {
+                tile_id: (
+                    None if not sources or (d := self._coordinator._get_device(sources[0])) is None or not d.last_seen
+                    else round(monotonic_time_coarse() - d.last_seen, 1)
+                )
+                for tile_id, sources in self.bindings.items()
+            },
         }
 
 
