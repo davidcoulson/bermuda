@@ -391,6 +391,13 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
         # Which scanners heard it in the last minute, so a consumer that only
         # cares about its own placed proxies can drop what a stray one hears.
         scanner_addresses = sorted({str(getattr(a, "scanner_address", "")).lower() for a in fresh if getattr(a, "scanner_address", None)})
+        heard_by = sorted(
+            (
+                {"address": str(a.scanner_address).lower(), "rssi": a.rssi}
+                for a in fresh if getattr(a, "scanner_address", None) and getattr(a, "rssi", None) is not None
+            ),
+            key=lambda h: -h["rssi"],
+        )
         rows.append(
             {
                 "address": address,
@@ -403,6 +410,7 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
                 "last_seen_age": nowstamp - last_seen,
                 "first_seen_age": (nowstamp - device.first_seen) if getattr(device, "first_seen", None) else None,
                 "scanner_addresses": scanner_addresses,
+                "heard_by": heard_by,   # loudest first
                 "scanners": len(fresh),
                 "best_rssi": best_rssi,
             }
