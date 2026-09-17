@@ -51,6 +51,11 @@ from .const import (
     METADEVICE_IBEACON_DEVICE,
     METADEVICE_PRIVATE_BLE_DEVICE,
     METADEVICE_TYPE_IBEACON_SOURCE,
+    METADEVICE_TILE_DEVICE,
+    ADDR_TYPE_TILE,
+    TILE_METADEVICE_PREFIX,
+    TILE_REF_POWER,
+    TILE_SERVICE_UUIDS,
 )
 from .util import mac_math_offset, mac_norm, mac_octet_offset as _mac_octet_offset
 
@@ -138,6 +143,8 @@ class BermudaDevice:
         self.create_button_done: bool = False
         self.create_all_done: bool = False  # All platform entities are done and ready.
         self.last_seen: float = 0  # stamp from most recent scanner spotting. monotonic_time_coarse
+        self.first_seen: float = 0  # stamp of the first advert we recorded for this address
+        self.is_tile: bool = False  # advertises Tile's 0xFEED service (see process_tile)
         self.diag_area_switch: str | None = None  # saves output of AreaTests
         self.adverts: dict[
             tuple[str, str], BermudaAdvert
@@ -175,7 +182,16 @@ class BermudaDevice:
             if self.address.count(":") != 5:
                 # Doesn't look like an actual MAC address - should be some sort of metadevice.
 
-                if re.match("^[A-Fa-f0-9]{32}_[A-Fa-f0-9]*_[A-Fa-f0-9]*$", self.address):
+                if self.address.startswith(TILE_METADEVICE_PREFIX):
+                    # A Tile metadevice. Its sources are the tag's (possibly rotating)
+                    # addresses, bound by BermudaTileManager - see bermuda_tile.py.
+                    self.address_type = ADDR_TYPE_TILE
+                    self.metadevice_type.add(METADEVICE_TILE_DEVICE)
+                    self.beacon_unique_id = self.address
+                    self.is_tile = True
+                    if self.manufacturer is None:
+                        self.manufacturer = "Tile"
+                elif re.match("^[A-Fa-f0-9]{32}_[A-Fa-f0-9]*_[A-Fa-f0-9]*$", self.address):
                     # It's an iBeacon uuid_major_minor
                     self.address_type = ADDR_TYPE_IBEACON
                     self.metadevice_type.add(METADEVICE_IBEACON_DEVICE)
@@ -787,6 +803,29 @@ class BermudaDevice:
         # Let's see if we should update our last_seen based on this...
         if device_advert.stamp is not None and self.last_seen < device_advert.stamp:
             self.last_seen = device_advert.stamp
+        if not self.first_seen and device_advert.stamp:
+            self.first_seen = device_advert.stamp
+
+    def process_tile(self, advert: BermudaAdvert) -> bool:
+        """Identify a Tile tracker by its 0xFEED service advertisement.
+
+        The ESPresense port: on first recognition the device is marked as a
+        Tile, named as one, and its per-device ref_power set to
+        TILE_REF_POWER (2 dB hotter than the default, as ESPresense calibrates
+        Tiles) unless the user already set one. Called from the advert's
+        service-uuid handling, NOT from process_manufacturer_data: a Tile
+        carries no manufacturer data, so that hook never fires for one.
+        """
+        if not any(uuid in TILE_SERVICE_UUIDS for uuid in advert.service_uuids):
+            return False
+        if not self.is_tile:
+            self.is_tile = True
+            if self.manufacturer is None:
+                self.manufacturer = "Tile"
+            if self.ref_power == 0:  # 0 means "use the global option": respect a user override
+                self.set_ref_power(TILE_REF_POWER)
+            self.make_name()
+        return True
 
     def process_manufacturer_data(self, advert: BermudaAdvert):
         """Parse manufacturer data for maker name and iBeacon etc."""

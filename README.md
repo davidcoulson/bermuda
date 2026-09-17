@@ -85,6 +85,26 @@ for any person/user.
 
 ![Assign a Bermuda sensor for Person tracking](img/screenshots/person-tracker.png)
 
+## Tile trackers (this fork)
+
+Tiles are recognised by their 0xFEED service advertisement (the ESPresense
+port): a Tile is named `tile_<mac>`, its reference power defaults 2 dB hotter
+than the global setting as ESPresense calibrates them (a value you set in the
+Number entity still wins), and it is listed under `Tile:` with the other
+metadevices in the device picker.
+
+Selecting a Tile configures a **Tile metadevice** (`tile_<12 hex>`) rather
+than the raw address, because newer Tiles rotate their Bluetooth address.
+Nothing in a Tile's advert can be resolved back to the tag (the schedule is
+seeded at pairing and held by Tile's servers), so the metadevice follows a
+rotation heuristically: when its bound address goes quiet and one new Tile
+address appears in the same window with the same signal strength at the same
+scanners, it re-binds. Two candidates that both fit means it binds nothing,
+logs it, and counts it in diagnostics — a wrong bind would silently report
+the wrong tag. Bindings persist across restarts. Diagnostics also carry a raw
+capture of every Tile address heard (address class, RSSI and payload history
+per scanner) for tuning the heuristic against real data.
+
 ## FAQ
 
 See [The FAQ](https://github.com/agittins/bermuda/wiki/FAQ) in the Wiki!

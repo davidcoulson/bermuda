@@ -54,6 +54,7 @@ from homeassistant.util.dt import get_age, now
 
 from .bermuda_device import BermudaDevice
 from .bermuda_irk import BermudaIrkManager
+from .bermuda_tile import BermudaTileManager
 from .const import (
     _LOGGER,
     _LOGGER_SPAM_LESS,
@@ -189,6 +190,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         self._scanner_list: set[str] = set()
         self._scanners: set[BermudaDevice] = set()  # Set of all in self.devices that is_scanner=True
         self.irk_manager = BermudaIrkManager()
+        self.tile_manager = BermudaTileManager(self)
 
         self.ar = ar.async_get(self.hass)
         self.er = er.async_get(self.hass)
@@ -1169,6 +1171,11 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         # FIXME: Can we delete this? pble's should create at realtime as they
         # are detected now.
         self.discover_private_ble_metadevices()
+        # Tile metadevices: create for configured Tiles, follow address rotations.
+        # (getattr: tests drive this method on lightweight coordinator stubs.)
+        tile_manager = getattr(self, "tile_manager", None)
+        if tile_manager is not None:
+            tile_manager.async_update()
 
         # iBeacon devices should already have their metadevices created, so nothing more to
         # set up for them.

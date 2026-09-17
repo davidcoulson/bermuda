@@ -20,9 +20,11 @@ from homeassistant.helpers.selector import (
     SelectSelectorMode,
 )
 
+from .bermuda_tile import tile_metadevice_id
 from .const import (
     ADDR_TYPE_IBEACON,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
+    ADDR_TYPE_TILE,
     BDADDR_TYPE_RANDOM_RESOLVABLE,
     CONF_ATTENUATION,
     CONF_CREATE_SCANNER_ENTITIES,
@@ -246,7 +248,11 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             return await self._update_options()
 
         # Grab the co-ordinator's device list so we can build a selector from it.
-        self.devices = self.config_entry.runtime_data.coordinator.devices
+        coordinator = self.config_entry.runtime_data.coordinator
+        self.devices = coordinator.devices
+        # Addresses already bound to a Tile metadevice are listed under it, not
+        # as their own raw entries.
+        tile_bound = coordinator.tile_manager.bound_sources() if hasattr(coordinator, "tile_manager") else set()
 
         # Where we store the options before building the selector
         options_list = []
@@ -277,6 +283,31 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                         value=device.address.upper(),
                         label=f"iBeacon: {device.address.upper()} {source_mac} "
                         f"{name if device.address.upper() != name.upper() else ''}",
+                    )
+                )
+                continue
+
+            if device.address_type == ADDR_TYPE_TILE:
+                # A Tile metadevice: tracked across address rotations.
+                source_mac = f"[{device.metadevice_sources[0].upper()}]" if device.metadevice_sources else ""
+                options_metadevices.append(
+                    SelectOptionDict(
+                        value=device.address.upper(),
+                        label=f"Tile: {device.address} {source_mac} "
+                        f"{name if device.address != name else ''}",
+                    )
+                )
+                continue
+            if getattr(device, "is_tile", False):
+                if device.address in tile_bound:
+                    continue  # shown under its metadevice above
+                # A raw Tile address: selecting it configures a Tile METADEVICE
+                # seeded from this address, so the tag keeps being tracked when
+                # it rotates.
+                options_metadevices.append(
+                    SelectOptionDict(
+                        value=tile_metadevice_id(device.address).upper(),
+                        label=f"Tile: [{device.address.upper()}] {name}",
                     )
                 )
                 continue

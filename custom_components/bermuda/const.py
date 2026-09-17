@@ -19,7 +19,7 @@ DOMAIN_DATA = f"{DOMAIN}_data"
 # that the component has been checked out from git, not pulled from
 # an officially built release. HACS will use the git tag (or the zip file,
 # either way it works).
-VERSION = "0.8.7-fork-testing.11"
+VERSION = "0.8.7-fork-testing.12"
 
 ATTRIBUTION = "Data provided by http://jsonplaceholder.typicode.com/"
 ISSUE_URL = "https://github.com/agittins/bermuda/issues"
@@ -80,8 +80,15 @@ METADEVICE_IBEACON_DEVICE: Final = "beacon device"  # The meta-device created to
 METADEVICE_TYPE_PRIVATE_BLE_SOURCE: Final = "private_ble_src"  # current (random) MAC of a private ble device
 METADEVICE_PRIVATE_BLE_DEVICE: Final = "private_ble_device"  # meta-device create to track private ble device
 
-METADEVICE_SOURCETYPES: Final = {METADEVICE_TYPE_IBEACON_SOURCE, METADEVICE_TYPE_PRIVATE_BLE_SOURCE}
-METADEVICE_DEVICETYPES: Final = {METADEVICE_IBEACON_DEVICE, METADEVICE_PRIVATE_BLE_DEVICE}
+METADEVICE_TYPE_TILE_SOURCE: Final = "tile_src"  # current (possibly rotating) MAC of a Tile tracker
+METADEVICE_TILE_DEVICE: Final = "tile_device"  # meta-device created to track a Tile across rotations
+
+METADEVICE_SOURCETYPES: Final = {
+    METADEVICE_TYPE_IBEACON_SOURCE,
+    METADEVICE_TYPE_PRIVATE_BLE_SOURCE,
+    METADEVICE_TYPE_TILE_SOURCE,
+}
+METADEVICE_DEVICETYPES: Final = {METADEVICE_IBEACON_DEVICE, METADEVICE_PRIVATE_BLE_DEVICE, METADEVICE_TILE_DEVICE}
 
 # Bluetooth Device Address Type - classify MAC addresses
 BDADDR_TYPE_UNKNOWN: Final = "bd_addr_type_unknown"  # uninitialised
@@ -93,6 +100,26 @@ BDADDR_TYPE_NOT_MAC48: Final = "bd_addr_not_mac48"
 # Non-bluetooth address types - for our metadevice entries
 ADDR_TYPE_IBEACON: Final = "addr_type_ibeacon"
 ADDR_TYPE_PRIVATE_BLE_DEVICE: Final = "addr_type_private_ble_device"
+ADDR_TYPE_TILE: Final = "addr_type_tile"
+
+# --- Tile trackers ---------------------------------------------------------------
+# A Tile advertises service UUID 0xFEED (0xFEEC is also assigned to Tile, Inc.),
+# with no manufacturer data, no local name and - on the hardware measured on
+# this fork's reference install - no service data either. See bermuda_tile.py.
+TILE_SERVICE_UUID: Final = "0000feed-0000-1000-8000-00805f9b34fb"
+TILE_SERVICE_UUID_ALT: Final = "0000feec-0000-1000-8000-00805f9b34fb"
+TILE_SERVICE_UUIDS: Final = frozenset({TILE_SERVICE_UUID, TILE_SERVICE_UUID_ALT})
+TILE_METADEVICE_PREFIX: Final = "tile_"  # metadevice id: tile_<12 hex of the first configured MAC>
+# Re-binding across an address rotation (a heuristic, see bermuda_tile.py).
+TILE_SILENT_SECS: Final = 45  # bound address quiet this long -> look for a successor
+TILE_HANDOVER_WINDOW: Final = 180  # a successor must have first appeared within this of the old one going quiet
+TILE_RSSI_TOLERANCE: Final = 8.0  # dB: mean per-scanner delta a successor must be within
+TILE_RSSI_MARGIN: Final = 3.0  # dB: the best candidate must beat the runner-up by this, or nothing binds
+TILE_MIN_SCANNERS: Final = 2  # scanners that must have heard both addresses before a score counts
+TILE_SOURCE_HISTORY: Final = 8  # recent addresses kept per Tile (newest first) for diagnostics
+TILE_STORAGE_KEY: Final = f"{DOMAIN}.tile_bindings"
+TILE_STORAGE_VERSION: Final = 1
+TILE_STORAGE_SAVE_DELAY: Final = 30  # seconds
 
 
 class IrkTypes(Enum):
@@ -176,6 +203,10 @@ DOCS[CONF_DEVTRACK_TIMEOUT] = "Timeout in seconds for setting devices as `Not Ho
 CONF_ATTENUATION, DEFAULT_ATTENUATION = "attenuation", 3
 DOCS[CONF_ATTENUATION] = "Factor for environmental signal attenuation."
 CONF_REF_POWER, DEFAULT_REF_POWER = "ref_power", -55.0
+# ESPresense calibrates Tiles 2 dB hotter than its own default (rssi.h: TILE_TX -4
+# vs DEFAULT_TX -6), so a Tile's per-device ref_power defaults to the same offset
+# from ours. A user-set value in the Number entity still wins.
+TILE_REF_POWER: Final = DEFAULT_REF_POWER + 2.0
 DOCS[CONF_REF_POWER] = "Default RSSI for signal at 1 metre."
 
 CONF_SAVE_AND_CLOSE = "save_and_close"

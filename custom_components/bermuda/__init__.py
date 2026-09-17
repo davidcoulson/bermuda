@@ -43,6 +43,8 @@ async def async_setup_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> b
         _LOGGER.info(STARTUP_MESSAGE)
     coordinator = BermudaDataUpdateCoordinator(hass, entry)
     entry.runtime_data = BermudaData(coordinator)
+    # Tile metadevice bindings persist across restarts (see bermuda_tile.py).
+    await coordinator.tile_manager.async_load()
 
     async def on_failure():
         _LOGGER.debug("Coordinator last update failed, rasing ConfigEntryNotReady")

@@ -20,6 +20,7 @@ from typing import TYPE_CHECKING, Final
 from bluetooth_data_tools import monotonic_time_coarse
 
 from .const import (
+    TILE_SERVICE_UUIDS,
     _LOGGER,
     CONF_ATTENUATION,
     CONF_MAX_VELOCITY,
@@ -256,6 +257,10 @@ class BermudaAdvert:
                 self.service_uuids.insert(0, service_uuid)
                 _want_name_update = True
                 del self.service_uuids[HIST_KEEP_COUNT:]
+                if service_uuid in TILE_SERVICE_UUIDS:
+                    # Tiles carry no manufacturer data, so the manufacturer-data
+                    # hook above never sees them; this is where they are recognised.
+                    self._device.process_tile(self)
 
         if _want_name_update:
             self._device.make_name()
