@@ -806,3 +806,41 @@ def test_orphan_sweeps_are_paced():
         assert asked == [b.address, c.address]          # next pass: only the unanswered one
 
     asyncio.run(scenario())
+
+
+def test_a_known_id_follows_a_natural_rotation_without_a_connection(monkeypatch):
+    async def scenario():
+        clock = {"t": 10_000.0}
+        monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
+        now = clock["t"]
+        a, b, c = _house(now)                     # B continues A's RSSI pattern; C does not
+        a.last_seen = now - 1
+        coord = _Coord({a.address: a}, configured=[])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        asked = []
+
+        async def probe(hass, address):
+            asked.append(address)
+            return "cafe01"
+
+        manager._probe_fn = probe
+        manager._request_probe(a.address, nowstamp=now)
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [a.address]
+        # Forty minutes later A goes quiet and B appears where A was: a natural rotation, long after the probe.
+        later = now + 2400
+        a.last_seen = later - 8
+        b.first_seen = later - 3; b.last_seen = later
+        c.first_seen = later - 3; c.last_seen = later
+        coord.devices[b.address] = b; coord.devices[c.address] = c
+        clock["t"] = later
+        manager.async_update(nowstamp=later)
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [a.address]                                 # no new connection
+        assert manager._probes[b.address]["uid"] == "cafe01" and manager._probes[b.address]["inherited_from"] == a.address
+        assert c.address not in manager._probes                     # a different pattern: not ours
+        ids = manager.identities()["cafe01"]
+        assert ids["addresses"] == [a.address, b.address] and ids["heard_by"][0]["scanner"] == "s1"
+
+    asyncio.run(scenario())

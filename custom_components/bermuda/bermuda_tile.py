@@ -314,6 +314,7 @@ class BermudaTileManager:
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
         if self._started is None:
             self._started = nowstamp
+        self._follow_rotations(nowstamp)   # every known ID, configured or not
         configured = {str(a).lower() for a in coordinator.options.get(CONF_DEVICES, [])}
         tile_ids = {a for a in configured if a.startswith(TILE_METADEVICE_PREFIX)} | set(self.bindings)
         if not tile_ids:
@@ -359,6 +360,28 @@ class BermudaTileManager:
                 dirty = True
         if dirty:
             self._schedule_save()
+
+    def _follow_rotations(self, nowstamp: float) -> None:
+        """Keep every known Tile ID attached to the address its Tile rotated to.
+
+        Not only the configured Tiles: a Tile whose ID was read once is
+        recognised again after a natural rotation by the same RSSI-pattern
+        test the handover uses, without another connection. That keeps the
+        identity table (who is where) current, so an ID can be matched to a
+        tag by watching which one moves.
+        """
+        if not self._probes:
+            return
+        for device in list(self._coordinator.devices.values()):
+            if (
+                not getattr(device, "is_tile", False)
+                or device.metadevice_sources
+                or device.address in self._probes
+                or not device.first_seen
+                or nowstamp - device.first_seen > TILE_HANDOVER_WINDOW + TILE_SILENT_SECS
+            ):
+                continue
+            self._inherit_answer(device.address, nowstamp)
 
     def bound_sources(self) -> set[str]:
         return {a for sources in self.bindings.values() for a in sources}
@@ -421,7 +444,7 @@ class BermudaTileManager:
                 continue
             entry = out.setdefault(uid, {
                 "uid": uid, "addresses": [], "last_seen_age": None, "area_name": None, "strongest": None,
-                "tile_id": uid_to_tile.get(uid),
+                "heard_by": [], "tile_id": uid_to_tile.get(uid),
             })
             entry["addresses"].append(address)
             device = self._coordinator._get_device(address)
@@ -433,12 +456,22 @@ class BermudaTileManager:
                 continue
             entry["last_seen_age"] = age
             entry["area_name"] = getattr(device, "area_name", None)
-            best = None
+            heard = []
             for advert in (getattr(device, "adverts", None) or {}).values():
                 rssi = getattr(advert, "rssi", None)
-                if rssi is not None and (best is None or rssi > best[0]):
-                    best = (rssi, getattr(advert, "name", None) or getattr(advert, "scanner_address", None))
-            entry["strongest"] = None if best is None else {"scanner": best[1], "rssi": best[0]}
+                stamp = getattr(advert, "stamp", None)
+                if rssi is None or (stamp is not None and now - stamp > 120):
+                    continue
+                heard.append({
+                    "address": getattr(advert, "scanner_address", None),
+                    "scanner": getattr(advert, "name", None) or getattr(advert, "scanner_address", None),
+                    "rssi": rssi,
+                })
+            heard.sort(key=lambda h: -h["rssi"])
+            # Every scanner that heard the freshest address, loudest first, so
+            # a consumer can pick the loudest of its OWN placed proxies.
+            entry["heard_by"] = heard
+            entry["strongest"] = heard[0] if heard else None
         return out
 
     def bind_by_uid(self, tile_id: str, uid: str) -> str | None:
@@ -593,27 +626,37 @@ class BermudaTileManager:
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
         return nowstamp - device.last_seen <= TILE_PROBE_MAX_AGE_SECS
 
-    def _inherit_answer(self, address: str) -> dict[str, Any] | None:
-        """The answer of a just-probed address this one continues, if any.
+    def _inherit_answer(self, address: str, nowstamp: float | None = None) -> dict[str, Any] | None:
+        """The answer of an address this one continues, if any.
 
-        ``address`` inherits when it first appeared within TILE_POST_PROBE_WINDOW
-        of a definitive probe answer (an ID, or "no ID") and its first readings
-        match that address's last ones on enough shared scanners (the same
-        test the handover heuristic uses). Records and returns the inherited
-        answer, or None.
+        ``address`` inherits when it first appeared either within
+        TILE_POST_PROBE_WINDOW of a definitive probe answer (a Tile changes
+        its address right after a connection) or in the handover window
+        after a known address went quiet (a natural rotation), and its first
+        readings match that address's last ones on enough shared scanners
+        (the same test the handover heuristic uses). Records and returns the
+        inherited answer, or None.
         """
         device = self._coordinator._get_device(address)
         if device is None or not device.first_seen:
             return None
+        nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
         best = None
         for probed, result in self._probes.items():
             if probed == address or result.get("error"):
                 continue
-            done = result["stamp"]
-            if not (done - 2.0 <= device.first_seen <= done + TILE_POST_PROBE_WINDOW):
-                continue
             departed = self._coordinator._get_device(probed)
             if departed is None:
+                continue
+            done = result["stamp"]
+            after_probe = done - 2.0 <= device.first_seen <= done + TILE_POST_PROBE_WINDOW
+            quiet = getattr(departed, "last_seen", None)
+            rotated = (
+                quiet is not None
+                and nowstamp - quiet >= 5.0                                   # the old address really stopped
+                and quiet - TILE_SILENT_SECS <= device.first_seen <= quiet + TILE_HANDOVER_WINDOW
+            )
+            if not (after_probe or rotated):
                 continue
             score = handover_score(departed, device)
             if score is None or score[0] > TILE_RSSI_TOLERANCE:
