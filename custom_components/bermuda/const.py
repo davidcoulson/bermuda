@@ -112,9 +112,14 @@ ADDR_TYPE_PRIVATE_BLE_DEVICE: Final = "addr_type_private_ble_device"
 ADDR_TYPE_TILE: Final = "addr_type_tile"
 
 # --- Tile trackers ---------------------------------------------------------------
-# A Tile advertises service UUID 0xFEED (0xFEEC is also assigned to Tile, Inc.),
-# with no manufacturer data, no local name and - on the hardware measured on
-# this fork's reference install - no service data either. See bermuda_tile.py.
+# A Tile advertises service UUID 0xFEED, with no manufacturer data, no local
+# name and - on the hardware measured on this fork's reference install - no
+# service data either. 0xFEEC is Tile's activation service: a Tile not yet
+# claimed by an account advertises it instead (node-tile's isTileActivated is
+# "FEED and not FEEC"). Both are accepted so an unclaimed Tile still tracks.
+# The advert carries no identity at all; newer "Private ID" Tiles expose their
+# Tile ID only through a GATT characteristic (9d410007-...), which is why
+# re-binding across an address rotation is a heuristic. See bermuda_tile.py.
 TILE_SERVICE_UUID: Final = "0000feed-0000-1000-8000-00805f9b34fb"
 TILE_SERVICE_UUID_ALT: Final = "0000feec-0000-1000-8000-00805f9b34fb"
 TILE_SERVICE_UUIDS: Final = frozenset({TILE_SERVICE_UUID, TILE_SERVICE_UUID_ALT})
