@@ -112,11 +112,18 @@ connecting, before any authentication (as
 active mode can reach the tag, Bermuda reads that ID once from the bound
 address and then resolves a rotation by reading each candidate's ID: a match
 binds outright, a different ID rules the candidate out, and a Tile with no ID
-characteristic cannot be a successor because it does not rotate. Probes run
-one at a time, hold the connection only for the read, remember every answer
-for the life of the address, and retry a failed connection after five
-minutes. The RSSI heuristic remains the fallback when no proxy can connect.
-Diagnostics list the learned IDs and probe counts.
+characteristic cannot be a successor because it does not rotate. Candidates
+are asked whether or not the Tile's own ID is known yet — a Tile whose bound
+address rotated away before its ID was ever read must not wait for a read
+that can never happen — and when the RSSI heuristic then picks a candidate
+that did answer, that answer becomes the Tile's ID, so the next rotation is
+resolved by identity. Probes run one at a time, hold the connection only for
+the read, are never attempted on an address not heard for two minutes,
+remember every answer for the life of the address, and retry an unreachable
+address after a minute (a failed read after two). The RSSI heuristic remains
+the fallback when no proxy can connect. Diagnostics list the learned IDs,
+every address's last probe answer and how long each bound address has been
+quiet.
 
 ## Managing devices without the options flow (this fork)
 
