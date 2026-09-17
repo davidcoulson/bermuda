@@ -44,6 +44,7 @@ from homeassistant.core import callback
 from homeassistant.helpers.storage import Store
 
 from .const import (
+    CONF_TILE_PROBES,
     _LOGGER,
     _LOGGER_SPAM_LESS,
     CONF_DEVICES,
@@ -99,6 +100,10 @@ TILE_ORPHAN_SECS = 300.0
 # this often per Tile: with the ID unknown a second pass teaches nothing,
 # and each connection rotates somebody's address.
 TILE_ORPHAN_SWEEP_SECS = 900.0
+# The bound address's last per-scanner RSSI pattern is persisted this often
+# while it is heard, so a Tile that rotates while Bermuda is down (or that
+# the handover window missed) can be adopted again by where it was.
+TILE_PATTERN_SAVE_SECS = 60.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 # A Tile changes its address right after every connection (observed: every
 # probe was followed within seconds by a fresh address with the same RSSI
@@ -265,6 +270,9 @@ class BermudaTileManager:
         self.last_probe: dict[str, Any] | None = None
         self._started: float | None = None  # first async_update stamp: scanners need a moment after a restart
         self._orphan_sweep_at: dict[str, float] = {}
+        # tile_id -> {scanner_address: rssi}: the bound address's last readings, persisted (see _follow_pattern).
+        self.patterns: dict[str, dict[str, float]] = {}
+        self._pattern_saved_at = 0.0
 
     # --- persistence ---------------------------------------------------------
 
@@ -286,6 +294,12 @@ class BermudaTileManager:
         uids = data.get("uids")
         if isinstance(uids, dict):
             self.uids = {str(k): str(v) for k, v in uids.items()}
+        patterns = data.get("patterns")
+        if isinstance(patterns, dict):
+            self.patterns = {
+                str(tile_id): {str(k).lower(): float(v) for k, v in pattern.items() if isinstance(v, (int, float))}
+                for tile_id, pattern in patterns.items() if isinstance(pattern, dict)
+            }
 
     def _data(self) -> dict[str, Any]:
         return {
@@ -293,6 +307,7 @@ class BermudaTileManager:
             "handovers": self.handovers,
             "ambiguous_handovers": self.ambiguous_handovers,
             "uids": self.uids,
+            "patterns": self.patterns,
         }
 
     def _schedule_save(self) -> None:
@@ -356,6 +371,8 @@ class BermudaTileManager:
                 if sources[0] in metadevice.metadevice_sources:
                     metadevice.metadevice_sources.remove(sources[0])
                 metadevice.metadevice_sources.insert(0, sources[0])
+            if self._remember_pattern(tile_id, sources, nowstamp):
+                dirty = True
             if self._maybe_handover(metadevice, tile_id, nowstamp):
                 dirty = True
         if dirty:
@@ -386,6 +403,82 @@ class BermudaTileManager:
     def bound_sources(self) -> set[str]:
         return {a for sources in self.bindings.values() for a in sources}
 
+    def _remember_pattern(self, tile_id: str, sources: list[str], nowstamp: float) -> bool:
+        """Keep the bound address's latest per-scanner RSSI while it is heard; True when worth saving."""
+        bound = self._coordinator._get_device(sources[0]) if sources else None
+        if bound is None or not bound.last_seen or nowstamp - bound.last_seen > TILE_SILENT_SECS:
+            return False
+        pattern = _rssi_by_scanner(bound, latest=True)
+        if not pattern:
+            return False
+        self.patterns[tile_id] = pattern
+        if nowstamp - self._pattern_saved_at >= TILE_PATTERN_SAVE_SECS:
+            self._pattern_saved_at = nowstamp
+            return True
+        return False
+
+    def _live_unbound_tiles(self, nowstamp: float) -> list[BermudaDevice]:
+        taken = self.bound_sources()
+        return [
+            d for d in self._coordinator.devices.values()
+            if getattr(d, "is_tile", False) and d.address not in taken and not d.metadevice_sources
+            and d.last_seen and nowstamp - d.last_seen <= TILE_SILENT_SECS
+        ]
+
+    def _adopt_by_pattern(self, tile_id: str, nowstamp: float) -> bool:
+        """Bind the live Tile address whose readings match where this Tile last was.
+
+        The persisted pattern stands in for the departed address the handover
+        heuristic normally compares against, so a Tile that rotated while
+        Bermuda was down comes back on its own - as long as it is not sitting
+        among other Tiles, where every candidate matches and nothing binds.
+        """
+        pattern = self.patterns.get(tile_id)
+        if not pattern:
+            return False
+        scored = []
+        for device in self._live_unbound_tiles(nowstamp):
+            now_readings = _rssi_by_scanner(device, latest=True)
+            shared = set(pattern) & set(now_readings)
+            if len(shared) < TILE_MIN_SCANNERS:
+                continue
+            score = sum(abs(pattern[s] - now_readings[s]) for s in shared) / len(shared)
+            scored.append((score, len(shared), device))
+        if not scored:
+            return False
+        scored.sort(key=lambda t: t[0])
+        best_score, best_n, best = scored[0]
+        if best_score > TILE_RSSI_TOLERANCE:
+            return False
+        if len(scored) > 1 and scored[1][0] - best_score < TILE_RSSI_MARGIN:
+            self.ambiguous_handovers += 1
+            self.last_ambiguity = {"tile": tile_id, "best": best.address, "score": best_score,
+                                   "runner_up": scored[1][2].address, "runner_up_score": scored[1][0],
+                                   "reason": "recovery", "stamp": monotonic_time_coarse()}
+            return False
+        self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern (recovered)")
+        return True
+
+    def bind_address(self, tile_id: str, address: str) -> str:
+        """The user says: configured Tile ``tile_id`` is the tag at ``address`` right now.
+
+        Binds it and remembers its readings as the Tile's pattern. Raises
+        ValueError for an unknown Tile or an address Bermuda does not know.
+        """
+        tile_id, address = tile_id.lower(), address.lower()
+        configured = {str(a).lower() for a in self._coordinator.options.get(CONF_DEVICES, [])}
+        if tile_id not in configured and tile_id not in self.bindings:
+            raise ValueError(f"{tile_id} is not a configured Tile")
+        device = self._coordinator._get_device(address)
+        if device is None:
+            raise ValueError(f"Bermuda has not heard {address}")
+        self.bind(tile_id, address, reason="user")
+        pattern = _rssi_by_scanner(device, latest=True)
+        if pattern:
+            self.patterns[tile_id] = pattern
+        self._schedule_save()
+        return address
+
     def _orphan_handover(self, tile_id: str, nowstamp: float) -> bool:
         """Recover a Tile whose bound address is long gone.
 
@@ -397,8 +490,10 @@ class BermudaTileManager:
         ``probe_results``), so the right address can be re-added by hand and
         every later rotation is resolved by identity.
         """
-        if not self._can_probe() or self._started is None or nowstamp - self._started < TILE_SILENT_SECS:
+        if self._started is None or nowstamp - self._started < TILE_SILENT_SECS:
             return False  # give the scanners a moment after a restart before declaring it gone
+        if not self._can_probe():
+            return self._adopt_by_pattern(tile_id, nowstamp)
         taken = self.bound_sources()
         uid = self.uids.get(tile_id)
         # An answer already in hand (read, inherited, or declared by the user) settles it without a sweep.
@@ -410,7 +505,7 @@ class BermudaTileManager:
                     return True
         last = self._orphan_sweep_at.get(tile_id)
         if last is not None and nowstamp - last < TILE_ORPHAN_SWEEP_SECS:
-            return False
+            return self._adopt_by_pattern(tile_id, nowstamp)
         self._orphan_sweep_at[tile_id] = nowstamp
         for device in list(self._coordinator.devices.values()):
             if (
@@ -425,7 +520,7 @@ class BermudaTileManager:
             if uid and result is not None and result.get("uid") == uid:
                 self.bind(tile_id, device.address, reason="tile id (recovered)")
                 return True
-        return False
+        return self._adopt_by_pattern(tile_id, nowstamp)
 
     def identities(self) -> dict[str, dict[str, Any]]:
         """Every Tile ID read so far and where that Tile is now.
@@ -617,7 +712,8 @@ class BermudaTileManager:
     # --- phase 3: probing --------------------------------------------------------
 
     def _can_probe(self) -> bool:
-        return self._hass is not None
+        """GATT probing needs hass and the tile_identity_probes option (off by default)."""
+        return self._hass is not None and bool(self._coordinator.options.get(CONF_TILE_PROBES, False))
 
     def _probe_possible(self, device: BermudaDevice | None, nowstamp: float | None = None) -> bool:
         """Whether ``device`` was heard recently enough for a connection to be attempted."""
@@ -825,6 +921,7 @@ class BermudaTileManager:
                 }
                 for a, r in self._probes.items()
             },
+            "patterns": {tile_id: len(p) for tile_id, p in self.patterns.items()},
             "bound_age": {
                 tile_id: (
                     None if not sources or (d := self._coordinator._get_device(sources[0])) is None or not d.last_seen

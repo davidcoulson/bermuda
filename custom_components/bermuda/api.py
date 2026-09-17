@@ -338,6 +338,7 @@ MANAGED_OPTIONS = frozenset(
         "create_scanner_entities",
         "track_categories",
         "exclude_devices",
+        "tile_identity_probes",
     }
 )
 
@@ -836,3 +837,15 @@ async def async_bind_tile(hass: HomeAssistant, tile_id: str, uid: str) -> dict[s
         return None
     address = manager.bind_by_uid(tile_id, uid)
     return {"tile_id": tile_id.lower(), "uid": uid.lower(), "address": address}
+
+
+async def async_bind_tile_address(hass: HomeAssistant, tile_id: str, address: str) -> dict[str, Any] | None:
+    """Declare that configured Tile ``tile_id`` is the tag at ``address`` now
+    (the user identified it by where it is). Raises ValueError for an unknown
+    Tile or address. None if Bermuda is not set up."""
+    coordinator = async_get_coordinator(hass)
+    manager = getattr(coordinator, "tile_manager", None)
+    if manager is None:
+        return None
+    bound = manager.bind_address(tile_id, address)
+    return {"tile_id": tile_id.lower(), "address": bound}

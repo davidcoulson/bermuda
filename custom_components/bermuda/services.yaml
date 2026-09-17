@@ -111,3 +111,25 @@ bind_tile:
       example: "c5664f0155716298"
       selector:
         text:
+
+bind_tile_address:
+  name: Bind Tile to an address
+  description: >-
+    Declare that a configured Tile is the tag currently advertising at this
+    address (you identified it by where it is). Its readings become the
+    Tile's remembered pattern, used to find it again after a rotation.
+  fields:
+    tile_id:
+      name: Tile
+      required: true
+      description: The configured Tile's metadevice id (TILE_<12 hex>).
+      example: "TILE_24D1093B0211"
+      selector:
+        text:
+    address:
+      name: Address
+      required: true
+      description: The Tile's current Bluetooth address, as listed among the heard devices.
+      example: "31:91:5D:22:1E:DA"
+      selector:
+        text:

@@ -105,7 +105,12 @@ the wrong tag. Bindings persist across restarts. Diagnostics also carry a raw
 capture of every Tile address heard (address class, RSSI and payload history
 per scanner) for tuning the heuristic against real data.
 
-**Identity over GATT.** A Tile gives up its Tile ID right after connecting,
+**Identity over GATT (off by default: `tile_identity_probes`).** What this
+buys depends on the Tile. On the Private ID models seen so far the readable
+ID rotates together with the address (three sweeps hours apart read three
+disjoint sets of IDs from the same tags), so it identifies a tag only until
+its next rotation, and a connection makes the Tile rotate on the spot. Leave
+it off unless your Tiles keep a stable ID. A Tile gives up its Tile ID right after connecting,
 before any authentication: through the Tile ID characteristic where a model
 has one, otherwise as a connectionless TDI request on the MEP channel (the
 `feed` service's 9d410018/9d410019 pair, the exchange

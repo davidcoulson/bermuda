@@ -74,6 +74,7 @@ from .const import (
     CONF_MAX_VELOCITY,
     CONF_REF_POWER,
     CONF_RSSI_OFFSETS,
+    CONF_TILE_PROBES,
     CONF_SMOOTHING_SAMPLES,
     CONF_UPDATE_INTERVAL,
     CONFDATA_FINDMY,
@@ -305,6 +306,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                     CONF_REF_POWER,
                     CONF_SMOOTHING_SAMPLES,
                     CONF_RSSI_OFFSETS,
+                    CONF_TILE_PROBES,
                 ):
                     self.options[key] = val
 
@@ -359,6 +361,13 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             "bind_tile",
             self.service_bind_tile,
             vol.Schema({vol.Required("tile_id"): cv.string, vol.Required("tile_uid"): cv.string}),
+            SupportsResponse.OPTIONAL,
+        )
+        hass.services.async_register(
+            DOMAIN,
+            "bind_tile_address",
+            self.service_bind_tile_address,
+            vol.Schema({vol.Required("tile_id"): cv.string, vol.Required("address"): cv.string}),
             SupportsResponse.OPTIONAL,
         )
 
@@ -1959,6 +1968,15 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         except ValueError as err:
             raise HomeAssistantError(str(err)) from err
         return {"options": options or {}}
+
+    async def service_bind_tile_address(self, call: ServiceCall) -> ServiceResponse:
+        from . import api  # noqa: PLC0415
+
+        try:
+            bound = await api.async_bind_tile_address(self.hass, call.data["tile_id"], call.data["address"])
+        except ValueError as err:
+            raise HomeAssistantError(str(err)) from err
+        return bound or {}
 
     async def service_bind_tile(self, call: ServiceCall) -> ServiceResponse:
         from . import api  # noqa: PLC0415

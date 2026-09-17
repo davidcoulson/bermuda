@@ -20,6 +20,7 @@ from custom_components.bermuda.bermuda_tile import (
     tile_metadevice_id,
 )
 from custom_components.bermuda.const import (
+    CONF_TILE_PROBES,
     ADDR_TYPE_TILE,
     CONF_DEVICES,
     METADEVICE_TILE_DEVICE,
@@ -125,7 +126,7 @@ class _Coord:
     def __init__(self, devices, configured=()):
         self.devices = dict(devices)
         self.metadevices = {}
-        self.options = {CONF_DEVICES: list(configured)}
+        self.options = {CONF_DEVICES: list(configured), CONF_TILE_PROBES: True}
         self.hass = None
 
     def _get_device(self, address):
@@ -844,3 +845,63 @@ def test_a_known_id_follows_a_natural_rotation_without_a_connection(monkeypatch)
         assert ids["addresses"] == [a.address, b.address] and ids["heard_by"][0]["scanner"] == "s1"
 
     asyncio.run(scenario())
+
+
+def test_probes_are_off_unless_the_option_is_on():
+    a, b, c = _house()
+    tile_id = tile_metadevice_id(a.address)
+    coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+    coord.options[CONF_TILE_PROBES] = False
+    manager = BermudaTileManager(coord)
+    coord.hass = manager._hass = _Hass()
+    assert not manager._can_probe()
+    manager.bindings[tile_id] = [a.address]
+    manager.async_update(nowstamp=10_000.0)
+    assert not coord.hass.tasks and manager.probes == 0
+
+
+def test_a_tile_lost_across_a_restart_is_adopted_by_its_remembered_pattern():
+    """Bermuda restarts after the bound address rotated: no departed readings
+    to compare against, but the persisted pattern says where the Tile was."""
+    now = 10_000.0
+    a, b, c = _house(now)
+    tile_id = tile_metadevice_id(a.address)
+    # Before the restart: A bound and heard, its pattern remembered.
+    coord = _Coord({a.address: a}, configured=[tile_id.upper()])
+    coord.options[CONF_TILE_PROBES] = False
+    manager = BermudaTileManager(coord)
+    manager.bindings[tile_id] = [a.address]
+    a.last_seen = now
+    manager.async_update(nowstamp=now)
+    assert set(manager.patterns[tile_id]) == {"s1", "s2"}
+    saved = manager._data()
+    # After the restart: A is gone, B (same readings) and C (different) are live.
+    coord2 = _Coord({b.address: b, c.address: c}, configured=[tile_id.upper()])
+    coord2.options[CONF_TILE_PROBES] = False
+    fresh = BermudaTileManager(coord2)
+    fresh.bindings = saved["bindings"]; fresh.patterns = saved["patterns"]
+    t1 = now + 1000
+    b.last_seen = c.last_seen = t1
+    fresh.async_update(nowstamp=t1)                     # just started: not declared gone yet
+    assert fresh.bindings[tile_id][0] == a.address
+    t2 = t1 + bermuda_tile.TILE_SILENT_SECS + 1
+    b.last_seen = c.last_seen = t2
+    fresh.async_update(nowstamp=t2)
+    assert fresh.bindings[tile_id][0] == b.address
+    assert fresh.last_handover["reason"] == "rssi pattern (recovered)"
+
+
+def test_bind_address_is_the_users_word():
+    now = 10_000.0
+    a, b, c = _house(now)
+    tile_id = tile_metadevice_id(a.address)
+    coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])
+    manager = BermudaTileManager(coord)
+    manager.bindings[tile_id] = [a.address]
+    assert manager.bind_address(tile_id.upper(), c.address.upper()) == c.address
+    assert manager.bindings[tile_id][0] == c.address and manager.last_handover["reason"] == "user"
+    assert abs(manager.patterns[tile_id]["s2"] + 60.33) < 0.1   # C reads -60/-61/-60 on s2
+    with pytest.raises(ValueError):
+        manager.bind_address("tile_000000000000", c.address)
+    with pytest.raises(ValueError):
+        manager.bind_address(tile_id, "ff:ff:ff:ff:ff:ff")

@@ -282,6 +282,10 @@ DOCS[CONF_REF_POWER] = "Default RSSI for signal at 1 metre."
 CONF_SAVE_AND_CLOSE = "save_and_close"
 CONF_SCANNER_INFO = "scanner_info"
 CONF_RSSI_OFFSETS = "rssi_offsets"
+# Read Tile IDs over GATT (this fork). Off by default: Private ID Tiles rotate
+# the readable ID together with the address, and a connection makes the Tile
+# rotate on the spot, so probing buys nothing on them.
+CONF_TILE_PROBES = "tile_identity_probes"
 
 CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL = "update_interval", 10
 DOCS[CONF_UPDATE_INTERVAL] = (
