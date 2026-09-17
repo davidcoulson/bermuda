@@ -317,8 +317,16 @@ class BermudaDevice:
                 connlist.add(("mac", altmac))
                 maclist.add(altmac)
 
-        # Requires 2025.3
-        devreg_devices = self._coordinator.dr.devices.get_entries(None, connections=connlist)
+        # Requires 2025.3. This used to call `dr.devices.get_entries(...)`, a
+        # lookup on the registry's internal container that HA deprecated
+        # (removal in 2027.9) in favour of the public `async_get_devices`,
+        # which is the same multi-match connection lookup. Older cores that
+        # predate the public method still get the container lookup.
+        _get_devices = getattr(self._coordinator.dr, "async_get_devices", None)
+        if _get_devices is not None:
+            devreg_devices = _get_devices(connections=connlist)
+        else:
+            devreg_devices = self._coordinator.dr.devices.get_entries(None, connections=connlist)
         devreg_count = 0  # can't len() an iterable.
         devreg_stringlist = ""  # for debug logging
         for devreg_device in devreg_devices:

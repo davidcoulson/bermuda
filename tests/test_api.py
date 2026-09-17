@@ -225,3 +225,135 @@ def test_coordinator_supports_listener_subscription():
     # sanity: MagicMock spec would accept anything, so assert on the real class
     assert callable(BermudaDataUpdateCoordinator.async_add_listener)
     _ = MagicMock  # keep import used for parity with other test modules
+
+
+# --- additive features on top of SNAPSHOT_VERSION 1 ------------------------- #
+
+
+def _make_tracked_coordinator():
+    """Two devices with adverts: one tracked (create_sensor) and one not; plus
+    two scanners in the coordinator's scanner set, one of which has never
+    relayed anything (last_seen 0)."""
+    coordinator = _make_coordinator()
+    tracked = coordinator.devices["aa:bb:cc:dd:ee:ff"]
+    tracked.create_sensor = True
+    tracked.unique_id = "aa:bb:cc:dd:ee:ff"
+    advert = next(iter(tracked.adverts.values()))
+    bystander = SimpleNamespace(
+        name="Some Passing Phone",
+        address_type="bd_addr_random_resolvable",
+        area_id=None,
+        area_name=None,
+        create_sensor=False,
+        adverts={("de:ad:be:ef:00:01", advert.scanner_address): advert},
+    )
+    coordinator.devices["de:ad:be:ef:00:01"] = bystander
+    live_scanner = SimpleNamespace(
+        address="f1:74:64:00:00:01",
+        name="Master Bedroom esp32c5 f17464",
+        unique_id="f1:74:64:00:00:00",
+        address_wifi_mac="f1:74:64:00:00:00",
+        area_id="master_bedroom",
+        area_name="Master Bedroom",
+        is_remote_scanner=True,
+        last_seen=1000.0,
+    )
+    silent_scanner = SimpleNamespace(
+        address="ab:cd:ef:00:00:02",
+        name="Garage Proxy",
+        unique_id=None,
+        address_wifi_mac=None,
+        area_id=None,
+        area_name=None,
+        is_remote_scanner=True,
+        last_seen=0,
+    )
+    coordinator.get_scanners = [live_scanner, silent_scanner]
+    return coordinator
+
+
+def test_snapshot_features_are_advertised():
+    """Consumers feature-detect by name rather than parsing versions."""
+    from custom_components.bermuda.api import SNAPSHOT_FEATURES
+
+    assert {"tracked_only", "tracked_devices", "scanners"} <= SNAPSHOT_FEATURES
+
+
+def test_tracked_only_snapshot_skips_untracked_devices():
+    """A consumer that only reads tracked devices must be able to skip the
+    (usually far larger) untracked majority before any per-advert work."""
+    hass = _make_hass(_make_tracked_coordinator())
+
+    everything = async_get_advert_snapshot(hass)
+    tracked_only = async_get_advert_snapshot(hass, tracked_only=True)
+
+    assert set(everything["devices"]) == {"aa:bb:cc:dd:ee:ff", "de:ad:be:ef:00:01"}
+    assert set(tracked_only["devices"]) == {"aa:bb:cc:dd:ee:ff"}
+    assert tracked_only["devices"]["aa:bb:cc:dd:ee:ff"]["tracked"] is True
+    # Same per-device shape either way: the flag only filters. (Ages are
+    # clock-relative and differ between the two calls, so compare keys.)
+    a = tracked_only["devices"]["aa:bb:cc:dd:ee:ff"]
+    b = everything["devices"]["aa:bb:cc:dd:ee:ff"]
+    assert a.keys() == b.keys()
+    assert a["scanners"].keys() == b["scanners"].keys()
+    assert a["scanners"]["f1:74:64:00:00:01"]["distance"] == b["scanners"]["f1:74:64:00:00:01"]["distance"]
+
+
+def test_tracked_devices_is_a_cheap_membership_view():
+    """The tracked-set accessor returns only tracked devices, keyed by address,
+    with the same slug the snapshot would report - and no adverts at all."""
+    from custom_components.bermuda.api import async_get_tracked_devices
+
+    hass = _make_hass(_make_tracked_coordinator())
+
+    tracked = async_get_tracked_devices(hass)
+
+    assert set(tracked) == {"aa:bb:cc:dd:ee:ff"}
+    assert tracked["aa:bb:cc:dd:ee:ff"] == {
+        "name": "Meg",
+        "slug": "meg",
+        "unique_id": "aa:bb:cc:dd:ee:ff",
+    }
+    assert async_get_tracked_devices(
+        SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
+    ) is None
+
+
+def test_scanners_expose_liveness_without_an_advert_walk():
+    """Scanner liveness comes from the scanner set itself, so a proxy that is
+    alive but hears no tracked device still reads as alive, and one that has
+    never relayed anything reads as never seen rather than as age 0."""
+    from custom_components.bermuda.api import async_get_scanners
+
+    hass = _make_hass(_make_tracked_coordinator())
+
+    scanners = async_get_scanners(hass)
+
+    live = scanners["f1:74:64:00:00:01"]
+    assert live["slug"] == slugify("Master Bedroom esp32c5 f17464")
+    assert live["unique_id"] == "f1:74:64:00:00:00"
+    assert live["is_remote"] is True
+    assert live["last_seen"] == 1000.0
+    assert live["last_seen_age"] is not None and live["last_seen_age"] >= 0
+
+    silent = scanners["ab:cd:ef:00:00:02"]
+    assert silent["last_seen"] is None
+    assert silent["last_seen_age"] is None
+
+    # The same map rides along in the snapshot, so one call serves both needs.
+    snapshot = async_get_advert_snapshot(hass, tracked_only=True)
+    assert set(snapshot["scanners"]) == {"f1:74:64:00:00:01", "ab:cd:ef:00:00:02"}
+    import json
+
+    json.dumps(snapshot)
+
+
+def test_snapshot_without_a_scanner_set_still_works():
+    """A coordinator (or test double) with no scanner set yields an empty
+    scanners map rather than an exception."""
+    from custom_components.bermuda.api import async_get_scanners
+
+    hass = _make_hass(_make_coordinator())
+
+    assert async_get_advert_snapshot(hass)["scanners"] == {}
+    assert async_get_scanners(hass) == {}

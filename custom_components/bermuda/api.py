@@ -44,6 +44,16 @@ if TYPE_CHECKING:
 # check this and degrade gracefully rather than assume.
 SNAPSHOT_VERSION = 1
 
+# Additive capabilities layered on SNAPSHOT_VERSION 1 without changing any
+# existing key. A consumer that wants one of these should feature-detect it
+# here rather than parse versions, and fall back to the v1 behaviour when the
+# name is absent (an older Bermuda build).
+#
+#   tracked_only     async_get_advert_snapshot(..., tracked_only=True)
+#   tracked_devices  async_get_tracked_devices()
+#   scanners         async_get_scanners(), and a top-level "scanners" map in the snapshot
+SNAPSHOT_FEATURES = frozenset({"tracked_only", "tracked_devices", "scanners"})
+
 
 @callback
 def async_get_coordinator(hass: HomeAssistant) -> BermudaDataUpdateCoordinator | None:
@@ -61,19 +71,143 @@ def async_get_coordinator(hass: HomeAssistant) -> BermudaDataUpdateCoordinator |
     return None
 
 
+def _slug_memo() -> Any:
+    """
+    A per-call slugify memo.
+
+    Many adverts across many devices share the same handful of physical
+    scanners, so slugify(scanner_name) is called far more often than there are
+    distinct names. Memoize per call (not globally: a scanner rename mid-run
+    should be picked up by the next snapshot, not held forever).
+    """
+    slug_cache: dict[str, str] = {}
+
+    def _cached_slug(name: str) -> str:
+        slug = slug_cache.get(name)
+        if slug is None:
+            slug = slug_cache[name] = slugify(name)
+        return slug
+
+    return _cached_slug
+
+
+def _scanner_entries(coordinator: Any, nowstamp: float, cached_slug: Any) -> dict[str, Any]:
+    """Build the per-scanner liveness map from the coordinator's scanner set."""
+    scanners: dict[str, Any] = {}
+    # get_scanners is a property returning the live set of scanner devices;
+    # tolerate a coordinator (or test double) that does not carry it.
+    for scanner in getattr(coordinator, "get_scanners", None) or ():
+        address = getattr(scanner, "address", None)
+        if not address:
+            continue
+        name = getattr(scanner, "name", None) or ""
+        last_seen = getattr(scanner, "last_seen", None) or None
+        scanners[address] = {
+            "name": name,
+            "slug": cached_slug(name) if name else "",
+            "address": address,
+            "unique_id": getattr(scanner, "unique_id", None),
+            "address_wifi_mac": getattr(scanner, "address_wifi_mac", None),
+            "area_id": getattr(scanner, "area_id", None),
+            "area_name": getattr(scanner, "area_name", None),
+            "is_remote": getattr(scanner, "is_remote_scanner", None),
+            # Monotonic stamp of the newest advert this scanner has relayed,
+            # for ANY device - i.e. "is this proxy alive", independent of
+            # whether any tracked device is in range of it.
+            "last_seen": last_seen,
+            "last_seen_age": (nowstamp - last_seen) if last_seen else None,
+        }
+    return scanners
+
+
+@callback
+def async_get_scanners(hass: HomeAssistant) -> dict[str, Any] | None:
+    """
+    Return every scanner Bermuda currently knows, keyed by address, with liveness.
+
+    This is the cheap answer to "which of my proxies are alive?": one small
+    dict built from the scanner set, with no advert walk and no JSON dump.
+    Consumers previously had to call the `bermuda.dump_devices` service (which
+    serialises every scanner's whole advert table) to read `last_seen` per
+    scanner.
+
+    Shape::
+
+        {
+          "<scanner address>": {
+            "name": str,
+            "slug": str,                 # best-effort, see snapshot caveat
+            "address": str,
+            "unique_id": str | None,
+            "address_wifi_mac": str | None,
+            "area_id": str | None,
+            "area_name": str | None,
+            "is_remote": bool | None,    # ESPHome/Shelly proxy vs local HCI
+            "last_seen": float | None,   # monotonic, newest advert relayed
+            "last_seen_age": float | None,  # seconds since last_seen
+          },
+          ...
+        }
+
+    Returns None if Bermuda is not set up.
+    """
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    return _scanner_entries(coordinator, monotonic_time_coarse(), _slug_memo())
+
+
+@callback
+def async_get_tracked_devices(hass: HomeAssistant) -> dict[str, Any] | None:
+    """
+    Return the devices Bermuda is configured to track, keyed by address.
+
+    A consumer that only needs to know WHICH devices are tracked (to notice a
+    device being added or removed, say) should call this rather than take a
+    full snapshot: it reads one attribute per known device and builds nothing
+    for the untracked majority, whereas the snapshot serialises every advert
+    of every device in range before a consumer can filter.
+
+    Shape::
+
+        {"<device address>": {"name": str, "slug": str, "unique_id": str | None}, ...}
+
+    Returns None if Bermuda is not set up.
+    """
+    coordinator = async_get_coordinator(hass)
+    if coordinator is None:
+        return None
+    cached_slug = _slug_memo()
+    tracked: dict[str, Any] = {}
+    for address, device in coordinator.devices.items():
+        if not getattr(device, "create_sensor", False):
+            continue
+        tracked[address] = {
+            "name": device.name,
+            "slug": cached_slug(device.name),
+            "unique_id": getattr(device, "unique_id", None),
+        }
+    return tracked
+
+
 @callback
 def async_get_advert_snapshot(
     hass: HomeAssistant,
     addresses: set[str] | None = None,
     *,
     include_empty: bool = False,
+    tracked_only: bool = False,
 ) -> dict[str, Any] | None:
     """
     Return a point-in-time snapshot of every device/scanner advertisement.
 
     `addresses` optionally limits the result to those device addresses
     (lower-cased MAC, or an iBeacon/IRK metadevice address). `include_empty`
-    keeps devices that currently have no adverts at all.
+    keeps devices that currently have no adverts at all. `tracked_only` limits
+    the result to devices the user has configured Bermuda to track (the
+    `tracked` flag below), skipping the walk over every other device in range;
+    a consumer that only ever reads tracked devices should always pass it, as
+    that is usually the difference between a dozen devices and several hundred.
 
     Returns None if Bermuda is not set up.
 
@@ -82,6 +216,7 @@ def async_get_advert_snapshot(
         {
           "version": 1,
           "stamp": <monotonic seconds>,
+          "scanners": { <scanner address>: {...}, ... },  # see async_get_scanners()
           "devices": {
             "<device address>": {
               "name": str,
@@ -133,22 +268,15 @@ def async_get_advert_snapshot(
 
     nowstamp = monotonic_time_coarse()
     wanted = {addr.lower() for addr in addresses} if addresses is not None else None
-
-    # Many adverts across many devices share the same handful of physical
-    # scanners, so slugify(scanner_name) is called far more often than there
-    # are distinct names. Memoize per-call (not globally: a scanner rename
-    # mid-run should be picked up by the next snapshot, not held forever).
-    slug_cache: dict[str, str] = {}
-
-    def _cached_slug(name: str) -> str:
-        slug = slug_cache.get(name)
-        if slug is None:
-            slug = slug_cache[name] = slugify(name)
-        return slug
+    _cached_slug = _slug_memo()
 
     devices: dict[str, Any] = {}
     for address, device in coordinator.devices.items():
         if wanted is not None and address.lower() not in wanted:
+            continue
+        # Cheapest test first: one attribute read drops the untracked majority
+        # before any of the per-advert work below.
+        if tracked_only and not getattr(device, "create_sensor", False):
             continue
         # Defensive: this walks shared coordinator state that other code owns,
         # and a public API must not be the thing that raises.
@@ -212,4 +340,8 @@ def async_get_advert_snapshot(
         "version": SNAPSHOT_VERSION,
         "stamp": nowstamp,
         "devices": devices,
+        # Scanner liveness rides along (it is a few dozen entries built from
+        # attributes, not an advert walk) so a consumer taking a snapshot
+        # anyway does not need a second call for it.
+        "scanners": _scanner_entries(coordinator, nowstamp, _cached_slug),
     }
