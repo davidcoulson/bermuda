@@ -68,13 +68,17 @@ if TYPE_CHECKING:
 # their address - expose their Tile ID here. Older Tiles have no such
 # characteristic and never rotate, so their MAC stays their identity.
 TILE_ID_CHAR_UUID = "9d410007-35d6-f4dd-ba60-e7bd8dc491c0"
-TILE_PROBE_TIMEOUT = 25.0  # seconds for one connect + read
+TILE_PROBE_TIMEOUT = 45.0  # seconds for one connect + read (a busy C3 proxy can take a while)
 TILE_PROBE_RETRY_SECS = 300.0  # a transient failure is retried after this
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 
 
 class TileProbeUnavailable(Exception):
     """No connectable scanner currently hears the address."""
+
+
+class TileNoIdCharacteristic(Exception):
+    """Connected, but the Tile exposes no Tile ID characteristic; str() lists what it does expose."""
 
 
 async def async_read_tile_uid(hass, address: str) -> str | None:
@@ -95,7 +99,13 @@ async def async_read_tile_uid(hass, address: str) -> str | None:
     try:
         char = client.services.get_characteristic(TILE_ID_CHAR_UUID)
         if char is None:
-            return None
+            # What the Tile does expose, so a model that keeps its ID
+            # somewhere else can be recognised from the diagnostics.
+            seen = []
+            for service in client.services:
+                chars = ",".join(c.uuid[4:8] if c.uuid.endswith("-0000-1000-8000-00805f9b34fb") else c.uuid for c in service.characteristics)
+                seen.append(f"{service.uuid[4:8] if service.uuid.endswith('-0000-1000-8000-00805f9b34fb') else service.uuid}[{chars}]")
+            raise TileNoIdCharacteristic(" ".join(seen) or "no services")
         return bytes(await client.read_gatt_char(char)).hex()
     finally:
         await client.disconnect()
@@ -352,6 +362,12 @@ class BermudaTileManager:
             )
             return True  # counters changed
         self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern")
+        # It rotated, so it IS a Private-ID Tile: a "no ID characteristic"
+        # answer was wrong (or read from a stale service cache). Forget it so
+        # the new address gets asked, with the services it exposes recorded.
+        if self.uids.get(tile_id) == "":
+            del self.uids[tile_id]
+            self._schedule_save()
         return True
 
     # --- phase 3: probing --------------------------------------------------------
@@ -385,6 +401,9 @@ class BermudaTileManager:
                 uid = await asyncio.wait_for(self._probe_fn(self._hass, address), TILE_PROBE_TIMEOUT)
             except TileProbeUnavailable as err:
                 self._record_probe(address, None, "unavailable", str(err))
+            except TileNoIdCharacteristic as err:
+                self._record_probe(address, None, None, str(err))
+                self._on_probe_result(address, None, learn_for)
             except Exception as err:  # noqa: BLE001 - bleak raises a zoo of exceptions
                 self._record_probe(address, None, "failed", f"{type(err).__name__}: {err}")
             else:

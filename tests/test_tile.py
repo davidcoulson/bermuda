@@ -423,3 +423,34 @@ def test_probe_results_are_not_repeated_and_failures_retry_later(monkeypatch):
         assert len(calls) == 2 and manager._probes["aa:00:00:00:00:01"]["uid"] == "cafe01"
 
     asyncio.run(scenario())
+
+
+def test_a_heuristic_handover_forgets_a_no_id_answer_so_the_new_address_is_asked():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        asked = []
+
+        async def probe(hass, address):
+            asked.append(address)
+            if address == a.address:
+                raise bermuda_tile.TileNoIdCharacteristic("feed[0018,0019]")
+            return "cafe01"
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)              # learns: "no id" from A
+        await asyncio.gather(*coord.hass.tasks)
+        assert manager.uids[tile_id] == "" and manager._probes[a.address]["error"] is None
+        assert manager.last_probe["detail"] == "feed[0018,0019]"
+        manager.async_update(nowstamp=now + 1)          # A quiet: heuristic binds B, forgets the "" answer
+        assert manager.bindings[tile_id][0] == b.address and tile_id not in manager.uids
+        manager.async_update(nowstamp=now + 2)          # ...and B gets asked
+        await asyncio.gather(*coord.hass.tasks)
+        assert asked == [a.address, b.address] and manager.uids[tile_id] == "cafe01"
+
+    asyncio.run(scenario())
