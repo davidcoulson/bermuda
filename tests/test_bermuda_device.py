@@ -153,3 +153,58 @@ def test_repr(bermuda_device):
     """Test __repr__ method."""
     repr_str = repr(bermuda_device)
     assert repr_str == f"{bermuda_device.name} [{bermuda_device.address}]"
+
+
+def test_scanner_registry_match_prefers_own_device_over_a_mac_neighbour(mock_coordinator, mock_remote_scanner):
+    """Regression: the +-3 octet registry search also matches a NEIGHBOUR.
+
+    An ESPHome proxy at BLE ..:4a (WiFi ..:48) and an unrelated ESPHome light
+    at WiFi ..:4c both fall inside the window, and the last entry the
+    registry returned used to win - so the proxy took the light's name,
+    unique_id and wifi mac (and could never be placed as the receiver it is).
+    The entry whose bluetooth connection IS the scanner address must win,
+    whatever order the registry returns them in.
+    """
+    from types import SimpleNamespace
+
+    proxy = SimpleNamespace(
+        id="dev-proxy",
+        name="Eilee Bedroom RRN00 4e8948",
+        name_by_user=None,
+        area_id="eilee_bedroom",
+        connections={("mac", "dc:06:75:4e:89:48"), ("bluetooth", "dc:06:75:4e:89:4a")},
+    )
+    light = SimpleNamespace(
+        id="dev-light",
+        name="Basement Lumary 4e894c",
+        name_by_user=None,
+        area_id="basement",
+        connections={("mac", "dc:06:75:4e:89:4c")},
+    )
+    for order in ([proxy, light], [light, proxy]):
+        mock_coordinator.dr.async_get_devices = MagicMock(return_value=list(order))
+        scanner = BermudaDevice(address="DC:06:75:4E:89:4A", coordinator=mock_coordinator)
+        scanner._hascanner = mock_remote_scanner
+        scanner.async_as_scanner_resolve_device_entries()
+        assert scanner.unique_id == "dc:06:75:4e:89:48", order
+        assert scanner.address_wifi_mac == "dc:06:75:4e:89:48"
+        assert scanner.address_ble_mac == "dc:06:75:4e:89:4a"
+        assert scanner.entry_id == "dev-proxy"
+        assert scanner.name_devreg == "Eilee Bedroom RRN00 4e8948"
+
+
+def test_scanner_registry_match_falls_back_to_the_wifi_plus_two_rule(mock_coordinator, mock_remote_scanner):
+    """With no bluetooth entry at all (older cores), the espressif BLE = WiFi + 2
+    neighbour beats any other offset."""
+    from types import SimpleNamespace
+
+    proxy = SimpleNamespace(id="p", name="Proxy", name_by_user=None, area_id=None,
+                            connections={("mac", "dc:06:75:4e:89:48")})
+    light = SimpleNamespace(id="l", name="Light", name_by_user=None, area_id=None,
+                            connections={("mac", "dc:06:75:4e:89:4c")})
+    mock_coordinator.dr.async_get_devices = MagicMock(return_value=[light, proxy])
+    scanner = BermudaDevice(address="dc:06:75:4e:89:4a", coordinator=mock_coordinator)
+    scanner._hascanner = mock_remote_scanner
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.unique_id == "dc:06:75:4e:89:48"
+    assert scanner.name_devreg == "Proxy"
