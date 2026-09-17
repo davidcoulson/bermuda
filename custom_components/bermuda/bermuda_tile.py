@@ -331,10 +331,23 @@ class BermudaTileManager:
             self._started = nowstamp
         self._follow_rotations(nowstamp)   # every known ID, configured or not
         configured = {str(a).lower() for a in coordinator.options.get(CONF_DEVICES, [])}
+        dirty = False
+        # A Tile the user stopped tracking must not keep a binding: it would go
+        # on claiming rotated addresses (and a metadevice) forever, competing
+        # with the Tiles that are still configured.
+        stale = [tile_id for tile_id in self.bindings if tile_id not in configured]
+        for tile_id in stale:
+            self.bindings.pop(tile_id, None)
+            self.patterns.pop(tile_id, None)
+            self.uids.pop(tile_id, None)
+            coordinator.metadevices.pop(tile_id, None)
+            dirty = True
+            _LOGGER.info("Tile %s is no longer tracked; its binding is forgotten", tile_id)
         tile_ids = {a for a in configured if a.startswith(TILE_METADEVICE_PREFIX)} | set(self.bindings)
         if not tile_ids:
+            if dirty:
+                self._schedule_save()
             return
-        dirty = False
         for tile_id in sorted(tile_ids):
             metadevice = coordinator._get_or_create_device(tile_id)
             if metadevice.address not in coordinator.metadevices:

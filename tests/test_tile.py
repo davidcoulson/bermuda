@@ -905,3 +905,31 @@ def test_bind_address_is_the_users_word():
         manager.bind_address("tile_000000000000", c.address)
     with pytest.raises(ValueError):
         manager.bind_address(tile_id, "ff:ff:ff:ff:ff:ff")
+
+
+def test_bindings_of_untracked_tiles_are_forgotten():
+    now = 10_000.0
+    a, b, _ = _house(now)
+    tile_id = tile_metadevice_id(a.address)
+    coord = _Coord({d.address: d for d in (a, b)}, configured=[tile_id])
+    manager = BermudaTileManager(coord)
+    saved = {}
+
+    class _FakeStore:
+        def async_delay_save(self, data_func, delay):
+            saved.update(data_func())
+
+        async def async_load(self):
+            return dict(saved)
+
+    manager._store = _FakeStore()
+    manager.async_update(nowstamp=now)
+    assert tile_id in manager.bindings and tile_id in coord.metadevices
+    # The user untracks it: the binding, pattern, ID and metadevice go, and the store is told.
+    coord.options[CONF_DEVICES] = []
+    manager.patterns[tile_id] = {"s1": -60.0}
+    manager.uids[tile_id] = "abc"
+    manager.async_update(nowstamp=now + 1)
+    assert manager.bindings == {} and manager.patterns == {} and manager.uids == {}
+    assert tile_id not in coord.metadevices
+    assert saved["bindings"] == {}
