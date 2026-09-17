@@ -537,3 +537,63 @@ def test_an_address_no_longer_heard_is_never_probed():
         assert manager.diagnostics()["probes"] == len(asked)
 
     asyncio.run(scenario())
+
+
+def test_an_orphaned_tile_is_recovered_by_identity():
+    """The bound address rotated while Bermuda was down: no window, no
+    heuristic - every live Tile is asked, and the one with our ID is bound."""
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        b.first_seen = c.first_seen = now - 3000            # long-lived: not handover candidates
+        coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])   # A never heard
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+        manager.uids[tile_id] = "cafe01"
+
+        async def probe(hass, address):
+            return {b.address: "beef02", c.address: "cafe01"}[address]
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        manager.async_update(nowstamp=now)                  # just started: not declared gone yet
+        assert not coord.hass.tasks
+        later = now + bermuda_tile.TILE_SILENT_SECS + 1
+        b.last_seen = c.last_seen = later
+        manager.async_update(nowstamp=later)                # orphan: both live Tiles asked
+        await asyncio.gather(*coord.hass.tasks)
+        manager.async_update(nowstamp=later + 1)
+        assert manager.bindings[tile_id][0] == c.address
+        # bound from inside the probe answer, or by the orphan sweep on the next cycle
+        assert manager.last_handover["reason"] in ("tile id", "tile id (recovered)")
+
+    asyncio.run(scenario())
+
+
+def test_an_orphaned_tile_with_an_unknown_id_learns_its_neighbours_but_binds_nothing():
+    async def scenario():
+        now = 10_000.0
+        a, b, c = _house(now)
+        tile_id = tile_metadevice_id(a.address)
+        coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])
+        manager = BermudaTileManager(coord)
+        coord.hass = manager._hass = _Hass()
+
+        async def probe(hass, address):
+            return {b.address: "beef02", c.address: "cafe01"}[address]
+
+        manager._probe_fn = probe
+        manager.bindings[tile_id] = [a.address]
+        later = now + bermuda_tile.TILE_SILENT_SECS + 1
+        manager.async_update(nowstamp=now)
+        b.last_seen = c.last_seen = later
+        manager.async_update(nowstamp=later)
+        await asyncio.gather(*coord.hass.tasks)
+        manager.async_update(nowstamp=later + 1)
+        assert manager.bindings[tile_id][0] == a.address    # nothing to compare against
+        results = manager.diagnostics()["probe_results"]
+        assert results[b.address]["uid"] == "beef02" and results[c.address]["uid"] == "cafe01"
+        assert manager.diagnostics()["bound_age"][tile_id] is None
+
+    asyncio.run(scenario())

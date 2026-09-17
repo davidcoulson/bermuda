@@ -75,6 +75,10 @@ TILE_PROBE_UNAVAILABLE_RETRY_SECS = 60.0  # ...and "no connectable scanner hears
 # Bluetooth manager drops it, and a rotated Tile is simply gone); probing
 # it only burns a proxy slot for TILE_PROBE_TIMEOUT.
 TILE_PROBE_MAX_AGE_SECS = 120.0
+# A bound address silent this long (or never heard since Bermuda started) is
+# an orphan: the Tile rotated while Bermuda was down, or the heuristic never
+# found the successor. Only identity can recover it (see _orphan_handover).
+TILE_ORPHAN_SECS = 300.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 
 
@@ -194,6 +198,7 @@ class BermudaTileManager:
         self.probes = 0
         self.probe_failures = 0
         self.last_probe: dict[str, Any] | None = None
+        self._started: float | None = None  # first async_update stamp: scanners need a moment after a restart
 
     # --- persistence ---------------------------------------------------------
 
@@ -241,6 +246,8 @@ class BermudaTileManager:
         """
         coordinator = self._coordinator
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
+        if self._started is None:
+            self._started = nowstamp
         configured = {str(a).lower() for a in coordinator.options.get(CONF_DEVICES, [])}
         tile_ids = {a for a in configured if a.startswith(TILE_METADEVICE_PREFIX)} | set(self.bindings)
         if not tile_ids:
@@ -290,12 +297,44 @@ class BermudaTileManager:
     def bound_sources(self) -> set[str]:
         return {a for sources in self.bindings.values() for a in sources}
 
+    def _orphan_handover(self, tile_id: str, nowstamp: float) -> bool:
+        """Recover a Tile whose bound address is long gone.
+
+        There is no handover window to reason about any more, and with several
+        Tiles in the house an RSSI guess would be a coin toss, so only identity
+        counts: every live Tile address bound to nothing is asked for its ID
+        and the one answering with this Tile's ID is bound. With the ID still
+        unknown nothing binds, but the answers are kept (diagnostics
+        ``probe_results``), so the right address can be re-added by hand and
+        every later rotation is resolved by identity.
+        """
+        if not self._can_probe() or self._started is None or nowstamp - self._started < TILE_SILENT_SECS:
+            return False  # give the scanners a moment after a restart before declaring it gone
+        taken = self.bound_sources()
+        uid = self.uids.get(tile_id)
+        for device in list(self._coordinator.devices.values()):
+            if (
+                not getattr(device, "is_tile", False)
+                or device.address in taken
+                or device.metadevice_sources
+                or not self._probe_possible(device, nowstamp)
+            ):
+                continue
+            self._request_probe(device.address, nowstamp=nowstamp)
+            result = self._probes.get(device.address)
+            if uid and result is not None and result.get("uid") == uid:
+                self.bind(tile_id, device.address, reason="tile id (recovered)")
+                return True
+        return False
+
     def _maybe_handover(self, metadevice: BermudaDevice, tile_id: str, nowstamp: float) -> bool:
         coordinator = self._coordinator
         sources = self.bindings.get(tile_id) or []
         bound = coordinator._get_device(sources[0]) if sources else None
-        if bound is None or not bound.last_seen:
+        if not sources:
             return False
+        if bound is None or not bound.last_seen or nowstamp - bound.last_seen > TILE_ORPHAN_SECS:
+            return self._orphan_handover(tile_id, nowstamp)
         quiet_for = nowstamp - bound.last_seen
         if quiet_for < TILE_SILENT_SECS:
             return False
