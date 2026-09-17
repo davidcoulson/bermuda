@@ -310,11 +310,12 @@ def test_tracked_devices_is_a_cheap_membership_view():
     tracked = async_get_tracked_devices(hass)
 
     assert set(tracked) == {"aa:bb:cc:dd:ee:ff"}
-    assert tracked["aa:bb:cc:dd:ee:ff"] == {
+    assert {k: v for k, v in tracked["aa:bb:cc:dd:ee:ff"].items() if k != "last_seen_age"} == {
         "name": "Meg",
         "slug": "meg",
         "unique_id": "aa:bb:cc:dd:ee:ff",
     }
+    assert "last_seen_age" in tracked["aa:bb:cc:dd:ee:ff"]
     assert async_get_tracked_devices(
         SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
     ) is None
