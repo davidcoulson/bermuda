@@ -31,7 +31,7 @@ import hashlib
 import json
 from dataclasses import dataclass, field
 from datetime import UTC, datetime
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives.asymmetric import ec
@@ -47,6 +47,9 @@ from .const import (
     FINDMY_SECONDARY_INTERVAL,
     FINDMY_SK_CHECKPOINT_INTERVAL,
 )
+
+if TYPE_CHECKING:
+    from collections.abc import Iterator
 
 # Order of the NIST P-224 curve.
 P224_N = 0xFFFFFFFFFFFFFFFFFFFFFFFFFFFF16A2E0B8F03E13DD29455C5C2A3D
@@ -324,21 +327,36 @@ class FindMyAccessoryKeys:
             self._sk_head[key_type] = (ind, sk)
         return sk
 
-    def _mac_at(self, ind: int, key_type: str, *, cache: bool = True) -> str:
-        """
-        Derive the MAC address for one index and key type.
-
-        ``cache`` is False for sweep indices: the sweep visits each one once and
-        moves on, so keeping them only grows a dict nothing will read again.
-        """
+    def _mac_at(self, ind: int, key_type: str) -> str:
+        """Derive (and cache) the MAC address for one index and key type."""
         if (mac := self._mac_cache.get((ind, key_type))) is not None:
             return mac
-        sk = self._sk_at(ind, key_type)
-        privkey = _derive_ps_key(self._master_key, sk)
-        mac = mac_from_public_key(_public_key_bytes(privkey))
-        if cache:
-            self._mac_cache[(ind, key_type)] = mac
+        mac = self._mac_from_sk(self._sk_at(ind, key_type))
+        self._mac_cache[(ind, key_type)] = mac
         return mac
+
+    def _mac_from_sk(self, sk: bytes) -> str:
+        return mac_from_public_key(_public_key_bytes(_derive_ps_key(self._master_key, sk)))
+
+    def _macs_over(self, low: int, high: int, key_type: str) -> Iterator[tuple[int, str]]:
+        """
+        ``(index, MAC)`` for every index in ``low..high``, walking the chain once.
+
+        For a run that lies BELOW the chain head, which is what the sweep is:
+        the narrow window leaves the head parked up at the pairing bound, and
+        ``_sk_at`` answers every index beneath it by rewinding to a checkpoint
+        and walking forward again - about 500 KDF steps each, 1.4 million for a
+        chunk, three quarters of the whole build. One rewind to ``low`` and one
+        step per index after that is the same addresses for a fraction of the
+        work. Nothing is cached, and a head that is above the run stays where
+        it is (one below it advances to ``low``, as any forward lookup would):
+        the sweep visits each index once and never returns to it.
+        """
+        sk = self._sk_at(low, key_type)
+        for ind in range(low, high + 1):
+            if ind > low:
+                sk = _x963_kdf(sk, b"update", 32)
+            yield ind, self._mac_from_sk(sk)
 
     def macs_for_window(self, now: datetime | None = None) -> dict[str, FindMyMacMatch]:
         """
@@ -366,13 +384,16 @@ class FindMyAccessoryKeys:
         sweep = self.sweep_range(now)
         if sweep is not None:
             low, high = sweep
-            for ind in range(low, high + 1):
-                mac = self._mac_at(ind, KEY_TYPE_PRIMARY, cache=False)
+            for ind, mac in self._macs_over(low, high, KEY_TYPE_PRIMARY):
                 macs.setdefault(mac, FindMyMacMatch(self.address, ind, KEY_TYPE_PRIMARY))
-            for sec_ind in {i // FINDMY_SECONDARY_INTERVAL for i in (low, high)}:
-                for offset in (1, 2):
-                    mac = self._mac_at(sec_ind + offset, KEY_TYPE_SECONDARY, cache=False)
-                    macs.setdefault(mac, FindMyMacMatch(self.address, sec_ind + offset, KEY_TYPE_SECONDARY))
+            # EVERY secondary index the chunk spans, not just the two at its
+            # ends: a chunk is thirty days of primaries and so thirty secondary
+            # keys, and a tag left somewhere without its owner - the one most
+            # worth finding - is advertising exactly one of the ones between.
+            sec_low = low // FINDMY_SECONDARY_INTERVAL + 1
+            sec_high = high // FINDMY_SECONDARY_INTERVAL + 2
+            for sec_ind, mac in self._macs_over(sec_low, sec_high, KEY_TYPE_SECONDARY):
+                macs.setdefault(mac, FindMyMacMatch(self.address, sec_ind, KEY_TYPE_SECONDARY))
 
         self._prune_caches(bottom)
         return macs

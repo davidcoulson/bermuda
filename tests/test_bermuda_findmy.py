@@ -10,12 +10,14 @@ import pytest
 
 from custom_components.bermuda.const import (
     FINDMY_KEY_INTERVAL,
+    FINDMY_SECONDARY_INTERVAL,
     FINDMY_LOOKAHEAD_INDICES,
     FINDMY_LOOKBEHIND_INDICES,
     FINDMY_MAX_UNALIGNED_INDICES,
 )
 from custom_components.bermuda.bermuda_findmy import (
     KEY_TYPE_PRIMARY,
+    KEY_TYPE_SECONDARY,
     BermudaFindMyManager,
     FindMyAccessoryKeys,
     FindMyKeyError,
@@ -711,6 +713,48 @@ def test_slow_rotating_accessory_is_found_below_the_pairing_bound():
     match = macs.get(acc._mac_at(real_index, KEY_TYPE_PRIMARY))  # noqa: SLF001
     assert match is not None, "the accessory must be findable at its real index"
     assert match.index == real_index
+
+
+def test_the_sweeps_fast_walk_yields_exactly_the_addresses_the_slow_path_does():
+    """
+    The sweep walks its chunk once instead of rewinding per index.
+
+    A fresh accessory answers ``_mac_at`` by the careful route (checkpoint,
+    walk, cache). The run must match it address for address, on both chains,
+    across a checkpoint boundary - and must not drag back a chain head parked
+    above the run, which is where the narrow window leaves it.
+    """
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    align = datetime(2026, 9, 1, tzinfo=UTC)
+    fast = _long_paired_accessory(paired, align, 69764)
+    slow = _long_paired_accessory(paired, align, 69764)
+    fast._sk_at(90000, KEY_TYPE_PRIMARY)  # noqa: SLF001 - park the head far above, as a real build does
+    head_before = fast._sk_head[KEY_TYPE_PRIMARY]  # noqa: SLF001
+    for key_type, low, high in ((KEY_TYPE_PRIMARY, 1019, 1030), (KEY_TYPE_SECONDARY, 700, 705)):
+        run = list(fast._macs_over(low, high, key_type))  # noqa: SLF001
+        assert [i for i, _ in run] == list(range(low, high + 1))
+        assert [m for _, m in run] == [slow._mac_at(i, key_type) for i in range(low, high + 1)]  # noqa: SLF001
+    assert fast._sk_head[KEY_TYPE_PRIMARY] == head_before  # noqa: SLF001
+    assert not any(k[0] in range(1019, 1031) for k in fast._mac_cache)  # noqa: SLF001 - nothing kept
+
+
+def test_a_separated_tag_is_found_anywhere_in_the_swept_chunk():
+    """
+    A tag away from its owner advertises a SECONDARY key, one per day.
+
+    A sweep chunk is thirty days of primaries, so thirty secondary keys. Only
+    the ones at the chunk's two ends used to be generated, which left a tag
+    that had been sitting somewhere without its owner - the one most worth
+    finding - invisible unless it happened to be at an edge.
+    """
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    acc = _long_paired_accessory(paired, datetime(2026, 7, 1, tzinfo=UTC), 60000)
+    low, high = _long_paired_accessory(paired, datetime(2026, 7, 1, tzinfo=UTC), 60000).sweep_range(now)
+    middle = (low + high) // 2 // FINDMY_SECONDARY_INTERVAL + 1
+    macs = acc.macs_for_window(now)
+    match = macs.get(acc._mac_at(middle, KEY_TYPE_SECONDARY))  # noqa: SLF001
+    assert match is not None and match.key_type == KEY_TYPE_SECONDARY and match.index == middle
 
 
 def test_the_pairing_end_is_still_covered():
