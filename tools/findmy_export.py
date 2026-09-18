@@ -465,15 +465,26 @@ def output_name(accessory: Accessory, taken: set[str]) -> str:
     return f"{candidate}.json"
 
 
+def _open_secret(path: Path) -> int:
+    """
+    A descriptor on a file only its owner can read - BEFORE anything is in it.
+
+    O_CREAT applies the mode only to a file that did not exist, so a rerun over
+    a file left at a looser mode has to be tightened too, and tightened first:
+    chmod after the write leaves the new keys readable for as long as the write
+    takes. The directory is made private as well; the file names in it are the
+    accessories' names, which say what someone owns.
+    """
+    path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    os.fchmod(fd, 0o600)
+    return fd
+
+
 def write_secret(path: Path, payload: str) -> None:
     """Write a file only its owner can read, without a readable moment first."""
-    path.parent.mkdir(parents=True, exist_ok=True)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-    with os.fdopen(fd, "w", encoding="utf-8") as handle:
+    with os.fdopen(_open_secret(path), "w", encoding="utf-8") as handle:
         handle.write(payload)
-    # O_CREAT only applies the mode to a file that did not exist; a rerun has
-    # to be told again, or a second export quietly keeps the first file's mode.
-    path.chmod(0o600)
 
 
 # --------------------------------------------------------------------------
@@ -499,9 +510,7 @@ def decrypt_only(source: Path, out_dir: Path, key_source) -> int:
             print(f"  skipped {relative}: {err}", file=sys.stderr)
             continue
         target = (out_dir / relative).with_suffix(".plist")
-        target.parent.mkdir(parents=True, exist_ok=True)
-        fd = os.open(target, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
-        with os.fdopen(fd, "wb") as handle:
+        with os.fdopen(_open_secret(target), "wb") as handle:
             plistlib.dump(record, handle, fmt=plistlib.FMT_XML)
         written += 1
     print(f"Wrote {written} decrypted record(s) to {out_dir}")

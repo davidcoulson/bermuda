@@ -304,9 +304,12 @@ def test_missing_source_is_not_a_traceback(tmp_path, capsys):
 def test_decrypt_only_writes_plists_in_the_same_layout(tmp_path):
     """The halfway house: decrypt here, convert (or not) elsewhere."""
     out = tmp_path / "plain"
-    assert findmy_export.main(
-        [str(write_encrypted(tmp_path / "src")), "--out", str(out), "--key", STORE_KEY.hex(), "--decrypt-only"]
-    ) == 0
+    assert (
+        findmy_export.main(
+            [str(write_encrypted(tmp_path / "src")), "--out", str(out), "--key", STORE_KEY.hex(), "--decrypt-only"]
+        )
+        == 0
+    )
 
     decrypted = out / "OwnedBeacons" / f"{BEACON_ID}.plist"
     assert decrypted.exists()
@@ -320,7 +323,7 @@ def test_decrypt_only_writes_plists_in_the_same_layout(tmp_path):
 @pytest.mark.parametrize(
     ("stable", "expected"),
     [
-        (["2006~#HW1234~#HHXXAB0CD1EF"], "HHXXAB0CD1EF"),   # AirTag
+        (["2006~#HW1234~#HHXXAB0CD1EF"], "HHXXAB0CD1EF"),  # AirTag
         (["a:/" + OTHER_ID + "~#C7XYZ01ABCDE"], "C7XYZ01ABCDE"),  # third-party tag
         (["nothing-separated"], None),
         ([], None),
@@ -329,3 +332,32 @@ def test_decrypt_only_writes_plists_in_the_same_layout(tmp_path):
 )
 def test_serial_number_forms(stable, expected):
     assert findmy_export._serial_number(stable) == expected
+
+
+def test_a_rerun_tightens_a_loose_file_before_writing_into_it(tmp_path, monkeypatch):
+    """A file left world-readable by an earlier run must be private again
+    BEFORE the new keys go in, not after: chmod-after-write leaves them
+    readable for as long as the write takes."""
+    import os
+
+    target = tmp_path / "keys" / "tag.json"
+    target.parent.mkdir()
+    target.write_text("old")
+    target.chmod(0o644)
+    seen = {}
+    real_fdopen = os.fdopen
+
+    def spy(fd, *args, **kwargs):
+        seen["mode_when_opened_for_writing"] = os.fstat(fd).st_mode & 0o777
+        return real_fdopen(fd, *args, **kwargs)
+
+    monkeypatch.setattr(findmy_export.os, "fdopen", spy)
+    findmy_export.write_secret(target, "new keys")
+    assert seen["mode_when_opened_for_writing"] == 0o600
+    assert target.read_text() == "new keys" and target.stat().st_mode & 0o777 == 0o600
+
+
+def test_the_output_directory_is_private(tmp_path):
+    target = tmp_path / "fresh" / "tag.json"
+    findmy_export.write_secret(target, "x")
+    assert target.parent.stat().st_mode & 0o777 == 0o700
