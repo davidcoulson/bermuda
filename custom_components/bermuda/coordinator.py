@@ -18,7 +18,7 @@ from homeassistant.components.bluetooth.api import _get_manager
 from homeassistant.const import MAJOR_VERSION as HA_VERSION_MAJ
 from homeassistant.const import MINOR_VERSION as HA_VERSION_MIN
 from homeassistant.const import Platform
-from homeassistant.exceptions import HomeAssistantError
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.core import (
     Event,
     HomeAssistant,
@@ -1989,6 +1989,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
     async def service_dump_devices(self, call: ServiceCall) -> ServiceResponse:  # pylint: disable=unused-argument;
         """Return a dump of beacon advertisements by receiver."""
+        # The dump is every address the house has heard, with names, areas
+        # and timings. Home Assistant lets any signed-in user call any
+        # service, so a caller with a user (a websocket or REST call) must be
+        # an administrator; automations and scripts carry no user and keep
+        # working, as does the diagnostics download, which calls this
+        # directly.
+        if (user_id := call.context.user_id) is not None:
+            user = await self.hass.auth.async_get_user(user_id)
+            if user is None or not user.is_admin:
+                raise Unauthorized(context=call.context)
         out = {}
         addresses_input = call.data.get("addresses", "")
         redact = call.data.get("redact", False)

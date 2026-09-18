@@ -136,7 +136,9 @@ class BermudaIrkManager:
             cipher = self._irks.get(irk, get_cipher_for_irk(irk))
             if cipher is None:
                 _LOGGER.error(
-                    "_validate_mac_irk called without prepared cipher for %s %s - this is a bug", address, irk.hex()
+                    "_validate_mac_irk called without prepared cipher for %s %s... - this is a bug",
+                    address,
+                    irk.hex()[:4],
                 )
         if resolve_private_address(cipher, address):
             _LOGGER.debug(
@@ -144,7 +146,12 @@ class BermudaIrkManager:
             )
             result = self._update_saved_mac(address, irk)
             if result != irk:
-                _LOGGER.error("Something went wrong saving macirk: %s %s is not irk %s", address, result, irk)
+                _LOGGER.error(
+                    "Something went wrong saving macirk: %s %s... is not irk %s...",
+                    address,
+                    result.hex()[:4],
+                    irk.hex()[:4],
+                )
             self.fire_callbacks(irk, address)
             return result
         if int(address[0], 16) & 0x04:
@@ -159,7 +166,7 @@ class BermudaIrkManager:
             # No existing, save anew.
             expiry = floor(monotonic_time_coarse() + PRUNE_TIME_KNOWN_IRK)
             self._macs[address] = ResolvableMAC(address, expiry, irk)
-            _LOGGER.debug("Saved NEW Macirk pair: %s %s", address, irk.hex())
+            _LOGGER.debug("Saved NEW Macirk pair: %s %s...", address, irk.hex()[:4])
             return irk
 
         if macirk.irk != irk:
@@ -228,7 +235,13 @@ class BermudaIrkManager:
         return _unsubscribe
 
     def async_diagnostics_no_redactions(self):
-        """Return diagnostic info. Make sure to run redactions over the results."""
+        """Return diagnostic info. Make sure to run redactions over the results.
+
+        IRKs are secrets: whoever holds one can resolve that phone's rotating
+        addresses for as long as the key lives, so like the FindMy private
+        keys they are never written out in full. The first two bytes are
+        enough to tell entries apart in a bug report.
+        """
         nowstamp = monotonic_time_coarse()
         macs = {}
         for macirk in self._macs.values():
@@ -236,10 +249,10 @@ class BermudaIrkManager:
                 if macirk.irk == IrkTypes.NO_KNOWN_IRK_MATCH.value:
                     irkout = IrkTypes.NO_KNOWN_IRK_MATCH.name
                 else:
-                    irkout = macirk.irk.hex()
+                    irkout = f"{macirk.irk.hex()[:4]}..."
                 macs[macirk.mac] = {"irk": irkout, "expires_in": floor(macirk.expires - nowstamp)}
 
         return {
-            "irks": [irk.hex() for irk in self._irks],
+            "irks": [f"{irk.hex()[:4]}..." for irk in self._irks],
             "macs": macs,
         }
