@@ -59,6 +59,11 @@ keep-runtime-typing = true
 max-complexity = 25
 
 [tool.ruff.lint.extend-per-file-ignores]
+# Command-line programs, not part of the integration: printing is what they do,
+# and they run under whatever Python the user has rather than HA's.
+"tools/**/*.py" = [
+    "T201",  # print - the tool's entire output
+]
 "tests/**/*.py" = [
     "S101",  # asserts allowed in tests...
     "ARG",   # Unused function args -> fixtures nevertheless are functionally relevant...
