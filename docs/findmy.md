@@ -45,6 +45,7 @@ are on decides the route.
 | macOS 14 (Sonoma) or earlier, signed into iCloud | [The local files](#route-1-a-macs-own-files), read by the tool in this repo |
 | macOS 15 (Sequoia) or later | [iCloud](#route-2-icloud), because the local route no longer works |
 | Windows or Linux, no Mac at all | [iCloud](#route-2-icloud) |
+| iCloud sign-in fails, and every Mac you own is on 15 or later | [A throwaway macOS 15 virtual machine](#route-3-a-throwaway-macos-15-virtual-machine) |
 | A FindMy.py JSON file already | Nothing to do — paste it straight into Bermuda |
 
 On macOS 15 and later, two things changed and both matter. The key that
@@ -119,6 +120,50 @@ Same output as above: one JSON file per tag, ready to paste.
 `uv` is [Astral's Python runner](https://docs.astral.sh/uv/); it fetches its
 own Python, so you do not need one installed. On macOS: `brew install uv`.
 
+## Route 3: a throwaway macOS 15 virtual machine
+
+Some Apple accounts never finish the iCloud sign-in route 2 uses: the
+two-factor code is accepted and Apple asks for it again, whether it arrives
+by text or on a trusted device
+([OpenTagViewer#236](https://github.com/parawanderer/OpenTagViewer/issues/236)).
+If that is you, and every Mac you have is on a macOS that keeps no records
+(26 and later), a virtual machine running macOS 15 gets you a Mac that does -
+one you can wreck freely and delete afterwards, so disabling its protections
+costs nothing.
+
+This is fiddly and assumes an Apple silicon Mac. The steps that are easy to
+get wrong are called out; the rest is ordinary.
+
+1. **Make the VM** with [UTM](https://mac.getutm.app), using Apple
+   virtualization and a **macOS 15** restore image. It has to be 15: macOS 14
+   still keeps the key readable but a VM cannot sign into iCloud before 15.
+2. **Sign into your Apple ID** in the guest and let it sync for a few
+   minutes. *Find My Mac* cannot be turned on inside a VM - that does not
+   matter, the accessory records sync without it. Check they arrived:
+   `ls ~/Library/com.apple.icloud.searchpartyd/OwnedBeacons` in the guest
+   should list one file per accessory.
+3. **Turn off its protections.** Boot it to recovery (`utmctl start
+   "<vm name>" --recovery`), open Terminal there and run `csrutil disable`.
+   Back in normal macOS, run `sudo nvram
+   boot-args="amfi_get_out_of_my_way=1"` and reboot. Without that second
+   step the extractor below is killed on launch with no message.
+   *Remote Login in the guest switches itself off across these reboots* -
+   if ssh to the guest stops working, that is why, not a hung VM.
+4. **Read the key** with
+   [pajowu's beaconstorekey-extractor](https://github.com/pajowu/beaconstorekey-extractor).
+   Build and sign it on your own Mac (the guest has no compiler), copy it
+   in, run it. Save its output to a file rather than your terminal: it is
+   the key to every record.
+5. **Copy the records out** of the guest (`OwnedBeacons` and the key file)
+   and convert them on your own Mac:
+
+   ```bash
+   python3 tools/findmy_export.py OwnedBeacons --key-file beaconstore.key --out ~/findmy-keys
+   ```
+
+6. **Delete the VM**, or at least sign it out of your Apple ID: it is a Mac
+   on your account with its protections off.
+
 ## Putting them into Bermuda
 
 For each file: open it, copy the whole thing, and paste it into **Settings →
@@ -168,7 +213,10 @@ automatically. Sextant's *Add a thing* wizard does this for you.
 ## When it does not work
 
 **"No BeaconStore key in your keychain"** on macOS 15 or later — expected, and
-not a password problem. Use route 2.
+not a password problem. Use route 2, or route 3 if that fails.
+
+**The iCloud sign-in asks for the two-factor code again after taking it** -
+an account-side problem no retry fixes. Use route 3.
 
 **"This Mac has no Find My records"** — the local cache is empty or absent.
 Recent macOS does not keep it. Use route 2.
@@ -177,8 +225,22 @@ Recent macOS does not keep it. Use route 2.
 hearing anything at all (the Bermuda device list will show plenty of unnamed
 devices if it is). An AirTag near its owner advertises differently from one
 that has been left behind, and Bermuda handles both — but a tag in a drawer
-with a dead battery advertises nothing. Also check the pairing date came
-through: a wrong `paired_at` puts the whole search window in the wrong place.
+with a dead battery advertises nothing.
+
+A tag that has been with you at home can take a while to find the first
+time. Its key schedule only advances quickly while it is away from you, so
+it runs months behind what its pairing date implies - 15,000 to 21,000
+steps behind, on the tags this was tested with. Bermuda searches up from
+where Apple last saw it, a month of the schedule per rebuild, so a tag with
+a recent sighting is found at once and one without may take a few rebuilds.
+Its status reads *looking for it* meanwhile; *not heard yet* means nothing
+is known about where it is.
+
+**AirPods are tracked but heard by almost nothing.** AirPods near you send
+their pairing advert, not the Find My one, and an ESPHome proxy that blocks
+Apple's manufacturer ID drops it. On the
+[filtering proxy component](https://github.com/davidcoulson/esphome-bluetooth-proxy-filter),
+`allow_findmy` lets both through from v1.5.1.
 
 **It was working and now it is not.** If the tag was unpaired and re-paired,
 every secret in the export is stale. Export it again.
