@@ -170,6 +170,12 @@ class FindMyAccessoryKeys:
         }
         self._mac_cache: dict[tuple[int, str], str] = {}
 
+        # Where the acquisition sweep has got to. See sweep_range(): an accessory
+        # whose alignment has gone stale is hunted across the whole plausible
+        # range of the schedule, a chunk per table build, starting at the
+        # alignment and working up.
+        self._sweep_cursor = 0
+
     @property
     def alignment_date(self) -> datetime:
         """When we last confirmed this accessory's position in its key schedule."""
@@ -239,6 +245,57 @@ class FindMyAccessoryKeys:
         bottom = max(floor, top - FINDMY_MAX_UNALIGNED_INDICES)
         return bottom, top
 
+    def sweep_range(self, now: datetime | None = None) -> tuple[int, int] | None:
+        """
+        The slice of the schedule to hunt through while the accessory is lost.
+
+        **The two bounds on a key index disagree, and the disagreement is the
+        normal case rather than a fault.** The alignment says where the
+        accessory actually was; the pairing date says where it would be had it
+        rotated on every interval since. Real accessories do not: an AirTag sat
+        in its owner's house rotates far more slowly than one that has been left
+        behind, so its index falls steadily further below wall-clock. Three tags
+        measured here were 15,000 to 21,000 indices short of their pairing
+        bound, which is months of drift, and none of them was findable in a
+        window anchored at that bound.
+
+        Nor can the alignment simply be trusted instead. A stale one can read
+        *below* the truth (see the lockout regression test), and then a ceiling
+        derived from it alone never reaches the accessory again.
+
+        So neither bound is picked. The narrow window from ``index_window()``
+        covers the pairing end, and this covers the rest - from the alignment
+        upward, a chunk per build, wrapping. The alignment end is swept first
+        because that is where a tag with a real, recent Apple observation
+        actually is, so the common case is found on the first build rather than
+        after a full pass.
+
+        Returns None when the alignment is fresh enough to be believed outright,
+        or when the narrow window already spans everything worth trying.
+        """
+        now = now or datetime.now(UTC)
+        align_date, align_index = self._alignment
+        elapsed = int((now - align_date) // FINDMY_KEY_INTERVAL) if now > align_date else 0
+        if elapsed <= FINDMY_ALIGNMENT_TRUST_INDICES:
+            return None  # just seen; the narrow window is exactly right
+
+        low = max(0, align_index - FINDMY_LOOKBEHIND_INDICES)
+        high = self.max_index(now) + FINDMY_LOOKAHEAD_INDICES
+        span = high - low
+        if span <= FINDMY_MAX_UNALIGNED_INDICES:
+            return None  # index_window() already reaches down this far
+
+        # Chunk the range, and move on next time so successive builds walk it.
+        start = low + self._sweep_cursor
+        if start >= high:
+            self._sweep_cursor = 0
+            start = low
+        end = min(start + FINDMY_MAX_UNALIGNED_INDICES, high)
+        self._sweep_cursor += FINDMY_MAX_UNALIGNED_INDICES
+        if low + self._sweep_cursor >= high:
+            self._sweep_cursor = 0
+        return start, end
+
     def _sk_at(self, ind: int, key_type: str) -> bytes:
         """
         Walk the SK chain to the given index.
@@ -267,14 +324,20 @@ class FindMyAccessoryKeys:
             self._sk_head[key_type] = (ind, sk)
         return sk
 
-    def _mac_at(self, ind: int, key_type: str) -> str:
-        """Derive (and cache) the MAC address for one index and key type."""
+    def _mac_at(self, ind: int, key_type: str, *, cache: bool = True) -> str:
+        """
+        Derive the MAC address for one index and key type.
+
+        ``cache`` is False for sweep indices: the sweep visits each one once and
+        moves on, so keeping them only grows a dict nothing will read again.
+        """
         if (mac := self._mac_cache.get((ind, key_type))) is not None:
             return mac
         sk = self._sk_at(ind, key_type)
         privkey = _derive_ps_key(self._master_key, sk)
         mac = mac_from_public_key(_public_key_bytes(privkey))
-        self._mac_cache[(ind, key_type)] = mac
+        if cache:
+            self._mac_cache[(ind, key_type)] = mac
         return mac
 
     def macs_for_window(self, now: datetime | None = None) -> dict[str, FindMyMacMatch]:
@@ -297,6 +360,19 @@ class FindMyAccessoryKeys:
             for offset in (1, 2):
                 mac = self._mac_at(sec_ind + offset, KEY_TYPE_SECONDARY)
                 macs.setdefault(mac, FindMyMacMatch(self.address, sec_ind + offset, KEY_TYPE_SECONDARY))
+
+        # The acquisition sweep, when the alignment is too old to pin the
+        # window down. setdefault so a narrow-window match keeps its entry.
+        sweep = self.sweep_range(now)
+        if sweep is not None:
+            low, high = sweep
+            for ind in range(low, high + 1):
+                mac = self._mac_at(ind, KEY_TYPE_PRIMARY, cache=False)
+                macs.setdefault(mac, FindMyMacMatch(self.address, ind, KEY_TYPE_PRIMARY))
+            for sec_ind in {i // FINDMY_SECONDARY_INTERVAL for i in (low, high)}:
+                for offset in (1, 2):
+                    mac = self._mac_at(sec_ind + offset, KEY_TYPE_SECONDARY, cache=False)
+                    macs.setdefault(mac, FindMyMacMatch(self.address, sec_ind + offset, KEY_TYPE_SECONDARY))
 
         self._prune_caches(bottom)
         return macs
@@ -341,6 +417,10 @@ class FindMyAccessoryKeys:
             current_index,
         )
         self._alignment = (seen_at, index)
+        # A sighting makes the sweep's progress meaningless: if this accessory
+        # is ever lost again, the hunt should restart from where it was last
+        # actually seen rather than from wherever the previous pass had got to.
+        self._sweep_cursor = 0
         return True
 
     def to_dict(self) -> dict[str, Any]:

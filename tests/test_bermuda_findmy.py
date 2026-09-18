@@ -9,8 +9,10 @@ from datetime import UTC, datetime, timedelta
 import pytest
 
 from custom_components.bermuda.const import (
+    FINDMY_KEY_INTERVAL,
     FINDMY_LOOKAHEAD_INDICES,
     FINDMY_LOOKBEHIND_INDICES,
+    FINDMY_MAX_UNALIGNED_INDICES,
 )
 from custom_components.bermuda.bermuda_findmy import (
     KEY_TYPE_PRIMARY,
@@ -674,3 +676,94 @@ def test_accessory_found_just_below_its_aligned_index():
     assert manager.check_mac(acc._mac_at(314, KEY_TYPE_PRIMARY)) is not None  # noqa: SLF001
     # Still bounded - slack, not a free-for-all.
     assert bottom >= 315 - 32
+
+
+def _long_paired_accessory(paired, align_date, align_index):
+    """An accessory whose alignment sits far below its pairing-derived bound."""
+    raw = json.loads(ACCESSORY_JSON)
+    raw["paired_at"] = paired.isoformat()
+    raw["alignment_date"] = align_date.isoformat()
+    raw["alignment_index"] = align_index
+    return FindMyAccessoryKeys.from_json(json.dumps(raw))
+
+
+def test_slow_rotating_accessory_is_found_below_the_pairing_bound():
+    """
+    A tag that rotates slowly must still be found, on the first build.
+
+    From three real tags exported off a Mac: each had an Apple alignment record
+    15,000 to 21,000 indices below what its pairing date implied, because a tag
+    sitting at home with its owner rotates far more slowly than one that has
+    been left behind. The window used to be anchored at the pairing bound, so
+    every one of them was searched roughly a year away from where it actually
+    was, and none could ever be seen.
+    """
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    # Apple saw it four hours ago at 69,764; wall-clock would say ~90,500.
+    acc = _long_paired_accessory(paired, datetime(2026, 9, 18, 12, 15, tzinfo=UTC), 69764)
+
+    pairing_bound = int((now - paired) // FINDMY_KEY_INTERVAL)
+    real_index = 69764 + 16  # it can only have advanced by the elapsed intervals
+    assert pairing_bound - real_index > 20000, "fixture must reproduce the real gap"
+
+    macs = acc.macs_for_window(now)
+    match = macs.get(acc._mac_at(real_index, KEY_TYPE_PRIMARY))  # noqa: SLF001
+    assert match is not None, "the accessory must be findable at its real index"
+    assert match.index == real_index
+
+
+def test_the_pairing_end_is_still_covered():
+    """The sweep adds to the narrow window rather than replacing it."""
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    acc = _long_paired_accessory(paired, datetime(2026, 9, 18, 12, 15, tzinfo=UTC), 69764)
+
+    macs = acc.macs_for_window(now)
+    top = acc.max_index(now)
+    assert acc._mac_at(top, KEY_TYPE_PRIMARY) in macs  # noqa: SLF001
+
+
+def test_sweep_walks_up_the_range_over_successive_builds():
+    """Each build takes the next chunk, so a whole schedule is covered in time."""
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    acc = _long_paired_accessory(paired, datetime(2026, 9, 18, 12, 15, tzinfo=UTC), 69764)
+
+    first = acc.sweep_range(now)
+    second = acc.sweep_range(now)
+    assert first is not None and second is not None
+    assert first[0] == 69764 - FINDMY_LOOKBEHIND_INDICES, "the hunt starts where Apple last saw it"
+    assert second[0] == first[0] + FINDMY_MAX_UNALIGNED_INDICES
+    assert second[1] > second[0]
+
+    # And it wraps rather than running off the end.
+    seen = [first, second]
+    for _ in range(40):
+        seen.append(acc.sweep_range(now))
+    assert any(s[0] == first[0] for s in seen[2:]), "the sweep must return to the start"
+    assert all(s[1] <= acc.max_index(now) + FINDMY_LOOKAHEAD_INDICES for s in seen)
+
+
+def test_fresh_alignment_needs_no_sweep():
+    """Just-seen accessories keep the cheap narrow window."""
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    acc = _long_paired_accessory(paired, now - timedelta(minutes=20), 69764)
+    assert acc.sweep_range(now) is None
+
+
+def test_a_sighting_restarts_the_hunt_from_where_it_was_seen():
+    """After a sighting the cursor resets, so a re-lost tag is hunted from there."""
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    acc = _long_paired_accessory(paired, datetime(2026, 9, 18, 12, 15, tzinfo=UTC), 69764)
+
+    acc.sweep_range(now)
+    acc.sweep_range(now)  # cursor is well up the range
+
+    acc.update_alignment(now, 69790)
+    later = now + timedelta(days=3)
+    resumed = acc.sweep_range(later)
+    assert resumed is not None
+    assert resumed[0] == 69790 - FINDMY_LOOKBEHIND_INDICES

@@ -150,6 +150,35 @@ def beacon_store_key(label: str = KEYCHAIN_LABEL) -> bytes:
     return key
 
 
+def key_from_file(path: Path) -> bytes:
+    """
+    Read the BeaconStore key out of a file, ignoring whatever else is in it.
+
+    The extractor prints a line of prose before the key, so this looks for the
+    key rather than insisting the file contain only that - which means its
+    output can be redirected to a file and handed straight over, with the key
+    never passing through a shell argument where the process list would show it.
+    """
+    try:
+        text = path.read_text(encoding="utf-8", errors="replace")
+    except OSError as err:
+        msg = f"Could not read the key file: {err}"
+        raise ExportError(msg) from err
+
+    for line in text.splitlines():
+        candidate = line.strip().replace(":", "").replace(" ", "")
+        if len(candidate) >= 32 and all(c in "0123456789abcdefABCDEF" for c in candidate):
+            try:
+                key = bytes.fromhex(candidate)
+            except ValueError:
+                continue
+            if len(key) in (16, 24, 32):
+                return key
+
+    msg = f"No key in {path} - expected a line of 32, 48 or 64 hex characters."
+    raise ExportError(msg)
+
+
 def decrypt_record(raw: bytes, key: bytes) -> dict[str, Any]:
     """
     Decrypt one ``.record`` file.
@@ -506,6 +535,15 @@ def build_parser() -> argparse.ArgumentParser:
         help="The BeaconStore key as hex, if you extracted it yourself instead of reading the keychain.",
     )
     parser.add_argument(
+        "--key-file",
+        type=Path,
+        help=(
+            "Read the BeaconStore key from a file instead of the command line, which keeps it out "
+            "of your shell history and out of the process list. Any line containing 32 or more hex "
+            "characters is taken as the key, so the extractor's own output can be piped straight in."
+        ),
+    )
+    parser.add_argument(
         "--decrypt-only",
         action="store_true",
         help="Decrypt the records into --out as plists and stop, converting nothing.",
@@ -535,7 +573,12 @@ def main(argv: list[str] | None = None) -> int:
 
     def key_source() -> bytes:
         if "key" not in cached:
-            cached["key"] = bytes.fromhex(args.key) if args.key else beacon_store_key()
+            if args.key:
+                cached["key"] = bytes.fromhex(args.key)
+            elif args.key_file:
+                cached["key"] = key_from_file(args.key_file)
+            else:
+                cached["key"] = beacon_store_key()
         return cached["key"]
 
     try:
