@@ -31,6 +31,7 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.util import slugify
 
 from .bermuda_advert import BermudaAdvert
+from .device_family import identify as identify_family
 from .const import (
     _LOGGER,
     _LOGGER_SPAM_LESS,
@@ -147,6 +148,10 @@ class BermudaDevice:
         self.last_seen: float = 0  # stamp from most recent scanner spotting. monotonic_time_coarse
         self.first_seen: float = 0  # stamp of the first advert we recorded for this address
         self.is_tile: bool = False  # advertises Tile's 0xFEED service (see process_tile)
+        # What kind of thing this is, when the SIG lists cannot say - a Govee
+        # sensor, a SmartTag (see device_family). A label, not an identity.
+        self.device_family: str | None = None
+        self.family_rotates: bool = False
         self.diag_area_switch: str | None = None  # saves output of AreaTests
         self.adverts: dict[
             tuple[str, str], BermudaAdvert
@@ -836,6 +841,22 @@ class BermudaDevice:
 
     def process_manufacturer_data(self, advert: BermudaAdvert):
         """Parse manufacturer data for maker name and iBeacon etc."""
+        # What kind of device this is, for the adverts the SIG lists cannot
+        # name. Only fills the gap: anything the lists did name keeps that.
+        if self.device_family is None:
+            family = identify_family(
+                service_uuids=advert.service_uuids,
+                service_data=advert.service_data[0] if advert.service_data else None,
+                manufacturer_data=advert.manufacturer_data[0] if advert.manufacturer_data else None,
+                name=self.name_bt_local_name or self.name,
+            )
+            if family is not None:
+                self.device_family = family.name
+                self.family_rotates = family.rotates
+                if self.manufacturer is None:
+                    self.manufacturer = family.name
+                    self.make_name()
+
         # Only override existing manufacturer name if it's "better"
 
         # ==== Check service uuids (type 0x16)

@@ -464,6 +464,11 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
                 "kind": kind,
                 "name": getattr(device, "name", None) or address,
                 "manufacturer": getattr(device, "manufacturer", None),
+                # What kind of thing it is when the SIG lists could not say,
+                # and whether that kind rotates its address (so a consumer can
+                # explain why something it can name still cannot be followed).
+                "family": getattr(device, "device_family", None),
+                "family_rotates": bool(getattr(device, "family_rotates", False)),
                 "address_type": address_type,
                 "area_name": getattr(device, "area_name", None),
                 "last_seen_age": nowstamp - last_seen,
