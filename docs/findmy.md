@@ -150,8 +150,13 @@ Anything that appears in Find My as an item, which is more than just AirTags:
   flat battery are not advertising anything. One record covers both buds and
   the case, and the serial in the export is whichever section the record
   names.
-- **Siri Remote** (the 2021 model onwards, the one with Find My) — works, and
-  is the reason a lot of people want this.
+- **Not the Siri Remote.** It is not a Find My accessory, whatever the name of
+  the feature suggests: tvOS 17's "find my remote" is an iPhone ranging the
+  remote directly over Bluetooth. There are no pairing keys, no record in the
+  export, and nothing for Bermuda to follow. A remote bonded to its Apple TV
+  also does not advertise while connected, so it cannot be tracked passively
+  either. To track one, put a tag on it - an AirTag in one of the remote
+  sleeves made for the purpose, or a small iBeacon - and track the tag.
 
 **iPhones, iPads, Macs and Apple Watches are the exception.** They are in these
 records too, but use Identity Resolving Keys for local Bluetooth, which is a
