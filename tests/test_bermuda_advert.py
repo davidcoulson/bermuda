@@ -130,3 +130,41 @@ def test_repr(bermuda_advert):
     """Test __repr__ method."""
     repr_str = repr(bermuda_advert)
     assert repr_str == "aa:bb:cc:dd:ee:ff__Mock Scanner"
+
+
+def test_calculate_data_idle_advert_is_left_exactly_as_it_is(bermuda_advert):
+    """An advert that is away, cleared and has nothing new returns at once, unchanged."""
+    advert = bermuda_advert
+    # Go away: no new stamp and the last one long past the distance timeout.
+    advert.new_stamp = None
+    advert.stamp = 0.0
+    advert.calculate_data()
+    assert advert.rssi_distance is None
+    assert list(advert.hist_distance_by_interval) == []
+    before = {
+        k: (list(v) if isinstance(v, list) else v)
+        for k, v in vars(advert).items()
+        if k.startswith(("hist_", "rssi", "stamp", "new_stamp"))
+    }
+    for _ in range(3):
+        advert.calculate_data()
+    after = {
+        k: (list(v) if isinstance(v, list) else v)
+        for k, v in vars(advert).items()
+        if k.startswith(("hist_", "rssi", "stamp", "new_stamp"))
+    }
+    assert after == before
+
+
+def test_calculate_data_wakes_from_idle_on_a_new_reading(bermuda_advert):
+    """The fast path never swallows an arrival."""
+    advert = bermuda_advert
+    advert.new_stamp = None
+    advert.stamp = 0.0
+    advert.calculate_data()
+    assert advert.rssi_distance is None
+    advert.rssi_distance_raw = 2.5
+    advert.new_stamp = 1000.0
+    advert.calculate_data()
+    assert advert.rssi_distance == 2.5
+    assert advert.new_stamp is None

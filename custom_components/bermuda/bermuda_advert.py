@@ -372,6 +372,17 @@ class BermudaAdvert:
         packets and for temporary occlusion (dogs' bodies etc)
         """
         new_stamp = self.new_stamp  # should have been set by update()
+
+        if new_stamp is None and self.rssi_distance is None and not self.hist_distance_by_interval:
+            # Already away and already cleared, with nothing new: every branch
+            # below would leave this advert exactly as it is. Most adverts are
+            # in this state most of the time - on a 58-scanner install 16,500
+            # adverts were walked every 1.05 s (975k calls a minute, ~3 % of
+            # the event loop), nearly all of them long silent. The history
+            # lists need no trim here either: they only grow alongside a new
+            # stamp, in update_advertisement.
+            return
+
         self.new_stamp = None  # Clear so we know if an update is missed next cycle
 
         if self.rssi_distance is None and new_stamp is not None:
