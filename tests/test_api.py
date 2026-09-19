@@ -662,3 +662,53 @@ def test_apple_advert_kinds_and_summary():
     assert api.apple_summary(api.apple_advert_kinds(tag), None).startswith("Find My")
     assert api.apple_advert_kinds({0x0059: b"\x01"}) == [] and api.apple_summary([], None) is None
     assert api.apple_advert_kinds(None) == []
+
+
+def test_a_rotating_devices_live_advert_wins_over_its_dead_old_addresses():
+    """
+    A phone or watch reaches the snapshot as a metadevice carrying the adverts
+    of every address it has used, so one scanner can appear several times.
+    The snapshot used to keep whichever came last - insertion order, not
+    freshness - so a timed-out advert from an old address could hide the live
+    reading, and a watch on a couch lost every ground-floor proxy.
+    """
+    scanner_device = SimpleNamespace(last_seen=1000.0)
+
+    def advert(distance, stamp, scanner="aa:00:00:00:00:01"):
+        return SimpleNamespace(
+            name="Great Room RRN00",
+            scanner_address=scanner,
+            scanner_device=scanner_device,
+            area_id="great_room",
+            area_name="Great Room",
+            rssi_distance=distance,
+            rssi_distance_raw=distance,
+            rssi=-64 if distance else None,
+            stamp=stamp,
+        )
+
+    live, dead, older_live = advert(1.4, 998.0), advert(None, 700.0), advert(2.9, 950.0)
+    for order in ([live, dead], [dead, live], [older_live, live, dead], [dead, older_live, live]):
+        watch = SimpleNamespace(
+            name="Private BLE Device David's Watch",
+            address_type="private_ble_device",
+            area_id=None,
+            area_name=None,
+            adverts={(f"rpa{i}", a.scanner_address): a for i, a in enumerate(order)},
+        )
+        hass = _make_hass(SimpleNamespace(devices={"watch": watch}))
+        scanner = async_get_advert_snapshot(hass)["devices"]["watch"]["scanners"]["aa:00:00:00:00:01"]
+        assert (scanner["distance"], scanner["stamp"]) == (1.4, 998.0), order
+
+    # A scanner that only ever heard dead addresses still reports, as dead.
+    watch = SimpleNamespace(
+        name="W",
+        address_type="private_ble_device",
+        area_id=None,
+        area_name=None,
+        adverts={("rpa0", "aa:00:00:00:00:02"): advert(None, 500.0, "aa:00:00:00:00:02")},
+    )
+    scanner = async_get_advert_snapshot(_make_hass(SimpleNamespace(devices={"w": watch})))["devices"]["w"]["scanners"][
+        "aa:00:00:00:00:02"
+    ]
+    assert scanner["distance"] is None

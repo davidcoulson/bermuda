@@ -56,6 +56,11 @@ if TYPE_CHECKING:
 # check this and degrade gracefully rather than assume.
 SNAPSHOT_VERSION = 1
 
+
+def _advert_rank(advert) -> tuple[bool, float]:
+    """Which of several adverts from one scanner a snapshot should report."""
+    return (getattr(advert, "rssi_distance", None) is not None, getattr(advert, "stamp", None) or 0.0)
+
 # Additive capabilities layered on SNAPSHOT_VERSION 1 without changing any
 # existing key. A consumer that wants one of these should feature-detect it
 # here rather than parse versions, and fall back to the v1 behaviour when the
@@ -742,6 +747,18 @@ def async_get_advert_snapshot(
 
         scanners: dict[str, Any] = {}
         for advert in device_adverts.values():
+            # A device that rotates its address - a phone, a watch, a Find My
+            # tag, a Tile - reaches here as a metadevice holding the adverts of
+            # EVERY address it has used, so one scanner can appear several
+            # times: once live, and once per old address that scanner heard
+            # before the rotation, long since timed out. This used to keep
+            # whichever came last in the dict, which is insertion history, not
+            # freshness - a dead advert could shadow the live one, and the
+            # consumer saw a scanner that "cannot hear" a device it was hearing
+            # every second. Keep the one with a distance, then the newest.
+            kept = scanners.get(advert.scanner_address)
+            if kept is not None and _advert_rank(advert) <= (kept["distance"] is not None, kept["stamp"] or 0.0):
+                continue
             scanner_device = coordinator.devices.get(advert.scanner_address) or advert.scanner_device
             # The scanner DEVICE's name is authoritative; advert.name is a copy
             # taken when the advert was created and goes stale if the scanner is
