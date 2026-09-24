@@ -61,7 +61,11 @@ def test_async_get_coordinator_returns_none_without_bermuda():
     assert async_get_advert_snapshot(hass) is None
 
 
-def test_snapshot_exposes_per_scanner_readings_without_entities():
+def test_snapshot_exposes_per_scanner_readings_without_entities(monkeypatch):
+    import custom_components.bermuda.api as api_module
+
+    # Stamps of 1000.0 below are only in the past on a host up that long.
+    monkeypatch.setattr(api_module, "monotonic_time_coarse", lambda: 2000.0)
     """The whole point: per-scanner distances are available straight from the
     coordinator, with no entity in the state machine involved."""
     hass = _make_hass(_make_coordinator())
@@ -321,7 +325,10 @@ def test_tracked_devices_is_a_cheap_membership_view():
     ) is None
 
 
-def test_scanners_expose_liveness_without_an_advert_walk():
+def test_scanners_expose_liveness_without_an_advert_walk(monkeypatch):
+    import custom_components.bermuda.api as api_module
+
+    monkeypatch.setattr(api_module, "monotonic_time_coarse", lambda: 2000.0)
     """Scanner liveness comes from the scanner set itself, so a proxy that is
     alive but hears no tracked device still reads as alive, and one that has
     never relayed anything reads as never seen rather than as age 0."""
@@ -640,6 +647,32 @@ def test_options_are_read_and_written_within_the_managed_set():
     assert out["attenuation"] == 2.5 and entry.options["rssi_offsets"] == {"x": 1} and len(updates) == 1
     with pytest.raises(ValueError):
         asyncio.run(async_set_options(hass, {"configured_devices": []}))
+
+
+def test_option_values_are_validated_before_they_are_persisted():
+    """A bad value written to the entry made every start after it fail."""
+    import asyncio
+    import pytest
+    from custom_components.bermuda.api import async_set_options
+
+    hass, entry, updates = _mgmt_hass()
+    for bad in ({"update_interval": 0}, {"smoothing_samples": 0}, {"attenuation": "walls"}, {"track_categories": "x"}):
+        with pytest.raises(ValueError):
+            asyncio.run(async_set_options(hass, bad))
+    assert not updates
+    # Coerced the way the options flow does it, so a form's strings still work.
+    out = asyncio.run(async_set_options(hass, {"update_interval": "2.5", "smoothing_samples": "12"}))
+    assert out["update_interval"] == 2.5 and out["smoothing_samples"] == 12
+
+
+def test_options_include_the_defaults_in_force():
+    """A fresh install has an empty options map; the UI still needs the values."""
+    from custom_components.bermuda.api import async_get_options
+
+    hass, entry, _updates = _mgmt_hass()
+    entry.runtime_data.coordinator.options = {"attenuation": 3.0, "ref_power": -55, "rssi_offsets": {}}
+    entry.options.update({"ref_power": -60})
+    assert async_get_options(hass) == {"attenuation": 3.0, "ref_power": -60}
 
 
 def test_management_is_advertised_as_a_feature():

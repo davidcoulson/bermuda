@@ -103,7 +103,9 @@ TILE_ORPHAN_SWEEP_SECS = 900.0
 # The bound address's last per-scanner RSSI pattern is persisted this often
 # while it is heard, so a Tile that rotates while Bermuda is down (or that
 # the handover window missed) can be adopted again by where it was.
-TILE_PATTERN_SAVE_SECS = 60.0
+# Patterns move with every reading; written this often the file was rewritten
+# ~1400 times a day for the life of the install. Bind changes save at once.
+TILE_PATTERN_SAVE_SECS = 15 * 60.0
 TILE_PROBE_RESULT_TTL = 6 * 3600  # forget results for addresses this old
 # A Tile changes its address right after every connection (observed: every
 # probe was followed within seconds by a fresh address with the same RSSI
@@ -273,6 +275,8 @@ class BermudaTileManager:
         # tile_id -> {scanner_address: rssi}: the bound address's last readings, persisted (see _follow_pattern).
         self.patterns: dict[str, dict[str, float]] = {}
         self._pattern_saved_at = 0.0
+        self._probes_expired_at = 0.0
+        self._closed = False
 
     # --- persistence ---------------------------------------------------------
 
@@ -311,8 +315,48 @@ class BermudaTileManager:
         }
 
     def _schedule_save(self) -> None:
-        if self._store is not None:
+        if self._store is not None and not self._closed:
             self._store.async_delay_save(self._data, TILE_STORAGE_SAVE_DELAY)
+
+    async def async_shutdown(self) -> None:
+        """
+        Stop the probe worker and write the bindings out, for unload and reload.
+
+        Left running, a worker mid-probe from the old coordinator finished up
+        to 45 s later, bound against a dead coordinator and scheduled a save
+        on the OLD Store, whose delayed write could then overwrite the new
+        manager's file.
+        """
+        self._closed = True
+        worker, self._worker = self._worker, None
+        if worker is not None and not worker.done():
+            worker.cancel()
+            with contextlib.suppress(asyncio.CancelledError, Exception):
+                await worker
+        self._queue.clear()
+        self._pending.clear()
+        if self._store is not None:
+            await self._store.async_save(self._data())
+
+    def _learn_uid(self, tile_id: str, uid: str) -> bool:
+        """
+        Record ``uid`` as this Tile's ID unless another configured Tile already has it.
+
+        Two Tiles sharing an ID would both be bound to every address that
+        answers it, forever; the read came from an address whose binding
+        had drifted onto the other Tile, so the binding is what is wrong.
+        """
+        other = next((t for t, known in self.uids.items() if known == uid and t != tile_id), None)
+        if other is not None:
+            _LOGGER.warning(
+                "Tile %s read Tile ID %s, which is %s's: its bound address belongs to that Tile, not learning it",
+                tile_id, uid, other,
+            )
+            self.bindings.pop(tile_id, None)
+            self._schedule_save()
+            return False
+        self.uids[tile_id] = uid
+        return True
 
     # --- per-cycle -----------------------------------------------------------
 
@@ -327,6 +371,8 @@ class BermudaTileManager:
         """
         coordinator = self._coordinator
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
+        if nowstamp - self._probes_expired_at >= 60.0:
+            self._expire_probes(nowstamp)
         if self._started is None:
             self._started = nowstamp
         self._follow_rotations(nowstamp)   # every known ID, configured or not
@@ -361,9 +407,9 @@ class BermudaTileManager:
                 known = self._probes.get(sources[0])
                 if known and not known.get("error") and known.get("uid"):
                     # Already read (as a handover candidate): that answer is this Tile's ID.
-                    self.uids[tile_id] = known["uid"]
                     dirty = True
-                    _LOGGER.info("Tile %s identified: Tile ID %s", tile_id, known["uid"])
+                    if self._learn_uid(tile_id, known["uid"]):
+                        _LOGGER.info("Tile %s identified: Tile ID %s", tile_id, known["uid"])
                 else:
                     self._request_probe(sources[0], learn_for=tile_id, nowstamp=nowstamp)
             sources = self.bindings.setdefault(tile_id, [])
@@ -711,8 +757,10 @@ class BermudaTileManager:
         # that is its ID (learned by inheritance), so the next rotation is
         # resolved by identity instead of by RSSI pattern.
         if not self.uids.get(tile_id) and (r := self._probes.get(best.address)) and r.get("uid"):
-            self.uids[tile_id] = r["uid"]
-            _LOGGER.info("Tile %s identified through its successor %s: Tile ID %s", tile_id, best.address, r["uid"])
+            if self._learn_uid(tile_id, r["uid"]):
+                _LOGGER.info("Tile %s identified through its successor %s: Tile ID %s", tile_id, best.address, r["uid"])
+            else:
+                return True  # that address is another Tile's: not a handover
         self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern")
         # It rotated, so it IS a Private-ID Tile: a "no ID characteristic"
         # answer was wrong (or read from a stale service cache). Forget it so
@@ -752,7 +800,13 @@ class BermudaTileManager:
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
         best = None
         for probed, result in self._probes.items():
-            if probed == address or result.get("error"):
+            # A "no ID" answer is not worth inheriting: it would mark a Tile
+            # that has just rotated as one that does not rotate.
+            if probed == address or result.get("error") or not result.get("uid"):
+                continue
+            # One successor per probed address: two Tiles in one drawer
+            # rotating within the window must not both continue the same one.
+            if any(r.get("inherited_from") == probed for a, r in self._probes.items() if a != address):
                 continue
             departed = self._coordinator._get_device(probed)
             if departed is None:
@@ -855,17 +909,33 @@ class BermudaTileManager:
             self.probe_failures += 1
             _LOGGER.debug("Tile probe of %s %s: %s", address, error, detail)
         self.last_probe = {"address": address, "uid": uid, "error": error, "detail": detail, "stamp": stamp}
-        # Forget answers for addresses that rotated away long ago.
+        self._expire_probes(stamp)
+
+    def _expire_probes(self, stamp: float) -> None:
+        """
+        Forget answers for addresses that rotated away long ago.
+
+        Also run from async_update: inherited answers arrive without a probe,
+        so with the budget spent the table only ever grew.
+        """
+        self._probes_expired_at = stamp
         for old in [a for a, r in self._probes.items() if stamp - r["stamp"] > TILE_PROBE_RESULT_TTL]:
             del self._probes[old]
 
     def _on_probe_result(self, address: str, uid: str | None, learn_for: str | None) -> None:
+        if self._closed:
+            return  # a probe that outlived its coordinator
         if learn_for is not None:
-            self.uids[learn_for] = uid or ""
-            _LOGGER.info(
-                "Tile %s %s", learn_for,
-                f"identified: Tile ID {uid}" if uid else "has no Tile ID characteristic (it will not rotate)",
-            )
+            if uid:
+                learned = self._learn_uid(learn_for, uid)
+            else:
+                self.uids[learn_for] = ""
+                learned = True
+            if learned:
+                _LOGGER.info(
+                    "Tile %s %s", learn_for,
+                    f"identified: Tile ID {uid}" if uid else "has no Tile ID characteristic (it will not rotate)",
+                )
             self._schedule_save()
         if not uid:
             return

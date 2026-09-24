@@ -139,6 +139,16 @@ def test_alignment_collapses_window_and_ignores_regressions():
     assert acc.alignment_index == 960
 
 
+def test_a_future_dated_sighting_cannot_lock_the_alignment():
+    """A clock that was ahead must not make every later real sighting look old."""
+    acc = _accessory()
+    real_now = datetime.now(UTC)
+    assert acc.update_alignment(real_now + timedelta(days=30), 960) is True
+    # Clamped to now, so a sighting a moment later still counts.
+    assert acc.update_alignment(real_now + timedelta(seconds=1), 961) is True
+    assert acc.alignment_index == 961
+
+
 def test_manager_matches_generated_macs():
     """The manager resolves an address the accessory would actually advertise."""
     manager = BermudaFindMyManager()
@@ -328,6 +338,7 @@ def test_alignment_persists_without_touching_the_config_entry():
 
     coordinator = SimpleNamespace(
         findmy_manager=manager,
+        _findmy_alignment_loaded=True,
         _findmy_store=SimpleNamespace(async_save=_save),
         hass=SimpleNamespace(config_entries=SimpleNamespace(async_update_entry=_explode)),
     )

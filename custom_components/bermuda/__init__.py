@@ -23,6 +23,8 @@ from .const import (
     FINDMY_STORAGE_VERSION,
     PLATFORMS,
     STARTUP_MESSAGE,
+    TILE_STORAGE_KEY,
+    TILE_STORAGE_VERSION,
 )
 from .coordinator import BermudaDataUpdateCoordinator
 from .util import mac_math_offset, mac_norm
@@ -151,15 +153,18 @@ async def async_unload_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> 
     coordinator = getattr(entry, "runtime_data", None)
     if coordinator is not None:
         await coordinator.coordinator.async_flush_findmy_alignment()
+        await coordinator.coordinator.async_shutdown_background_writers()
     if unload_result := await hass.config_entries.async_unload_platforms(entry, PLATFORMS):
         _LOGGER.debug("Unloaded platforms.")
     return unload_result
 
 
 async def async_remove_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> None:
-    """Delete the FindMy alignment store when the integration is removed."""
+    """Delete the FindMy alignment and Tile binding stores when the integration is removed."""
     await Store(hass, FINDMY_STORAGE_VERSION, FINDMY_STORAGE_KEY).async_remove()
-    _LOGGER.debug("Removed FindMy alignment store.")
+    # Left behind, old Tile bindings and IDs would come back on a fresh re-add.
+    await Store(hass, TILE_STORAGE_VERSION, TILE_STORAGE_KEY).async_remove()
+    _LOGGER.debug("Removed FindMy alignment and Tile binding stores.")
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> None:
