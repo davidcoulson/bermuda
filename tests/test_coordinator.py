@@ -187,7 +187,7 @@ def test_async_update_data_internal_single_pass_per_device():
     mock_dispatch.assert_called_once_with(coordinator.hass, SIGNAL_DEVICE_NEW, "tracked")
 
     assert coordinator.last_update_success is True
-def test_prune_devices_tolerates_duplicate_prune_entries():
+def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
     """A device listed twice in prune_list must not crash the update cycle.
 
     Regression test: ``prune_list`` is appended to from three independent
@@ -202,9 +202,13 @@ def test_prune_devices_tolerates_duplicate_prune_entries():
     the whole coordinator refresh ("Unexpected error fetching bermuda data").
     Observed in the wild on a 60-proxy install.
     """
-    from bluetooth_data_tools import monotonic_time_coarse
-
+    import custom_components.bermuda.coordinator as coordinator_module
     from custom_components.bermuda.const import BDADDR_TYPE_RANDOM_RESOLVABLE
+
+    # A last_seen of 0 is only 960 s stale once the host has been up that
+    # long; pin the clock so the test does not depend on container uptime.
+    monotonic_time_coarse = lambda: 5000.0  # noqa: E731
+    monkeypatch.setattr(coordinator_module, "monotonic_time_coarse", monotonic_time_coarse)
 
     stale_irk = "73:ec:0e:56:42:9e"
     fresh_irk = "73:ec:0e:56:42:01"

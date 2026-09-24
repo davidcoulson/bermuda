@@ -1105,6 +1105,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         #
         # Just brute-force all devices, because it was getting a bit hairy
         # ensuring we hit the right ones, and the cost is fairly low and periodic.
+        prune_set = set(prune_list)  # devices x prune_list list scans added up on a big prune
         for device in self.devices.values():
             # if (
             #     device.is_scanner
@@ -1112,13 +1113,12 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             #     or METADEVICE_IBEACON_DEVICE in device.metadevice_type
             # ):
             # clean out the metadevice_sources field
-            for address in prune_list:
-                if address in device.metadevice_sources:
-                    device.metadevice_sources.remove(address)
+            if prune_set.intersection(device.metadevice_sources):
+                device.metadevice_sources = [a for a in device.metadevice_sources if a not in prune_set]
 
             # clean out the device/scanner advert pairs
             for advert_tuple in list(device.adverts.keys()):
-                if device.adverts[advert_tuple].device_address in prune_list:
+                if device.adverts[advert_tuple].device_address in prune_set:
                     _LOGGER.debug(
                         "Pruning metadevice advert %s aged %ds",
                         advert_tuple,
@@ -1227,10 +1227,12 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         """
         metadevice = self._get_or_create_device(match.accessory_id)
 
+        # Registered whenever it is missing, not only while it has no sources:
+        # dropped from the map with a stale source list, it never came back.
+        if metadevice.address not in self.metadevices:
+            self.metadevices[metadevice.address] = metadevice
         if len(metadevice.metadevice_sources) == 0:
             # ##### NEW METADEVICE #####
-            if metadevice.address not in self.metadevices:
-                self.metadevices[metadevice.address] = metadevice
             accessory = self.findmy_manager.accessories.get(match.accessory_id)
             if accessory is not None:
                 metadevice.name_bt_local_name = metadevice.name_bt_local_name or accessory.friendly_name
@@ -1373,9 +1375,22 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         Nothing to flush when no accessory is configured, and writing then would
         create the Store for an install that never uses FindMy.
         """
-        if not self.findmy_manager.accessories:
+        # Nor before the Store has been read: what the manager holds then is
+        # the config entry's snapshot, which may be weeks behind the file.
+        if not self.findmy_manager.accessories or not self._findmy_alignment_loaded:
             return
         await self.async_save_findmy_alignment()
+
+    async def async_shutdown_background_writers(self) -> None:
+        """
+        Stop the timers and workers that write state, for unload and reload.
+
+        Left running, the old coordinator's alignment Debouncer fired up to a
+        minute later and the Tile probe worker finished a 45 s probe, each
+        writing its stale state over the new coordinator's file.
+        """
+        self._findmy_alignment_debouncer.async_shutdown()
+        await self.tile_manager.async_shutdown()
 
     def register_ibeacon_source(self, source_device: BermudaDevice):
         """

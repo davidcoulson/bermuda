@@ -425,7 +425,10 @@ class FindMyAccessoryKeys:
         Called from the event loop while the executor thread may be reading the
         alignment, so the update is published as a single tuple assignment.
         """
-        seen_at = _ensure_aware(seen_at)
+        # Never dated in the future: a sighting stamped while the clock was
+        # ahead (a boot before NTP) would otherwise reject every real one
+        # after it, and persist, until the wall clock caught up.
+        seen_at = min(_ensure_aware(seen_at), datetime.now(UTC))
         current_date, current_index = self._alignment
         if seen_at < current_date or index < current_index:
             return False

@@ -248,6 +248,11 @@ def _iter_source_files(source: Path):
                 # A zip carries its own leading folder; the layout starts at
                 # whichever component is one of Apple's directory names.
                 parts = name.split("/")
+                # A ".." or empty component in an entry name would write
+                # outside the output folder in decrypt_only; no real export
+                # carries one, so such an entry is skipped rather than trusted.
+                if any(part in ("", ".", "..") for part in parts):
+                    continue
                 for index, part in enumerate(parts):
                     if part in (*OWNED_DIRS, NAMING_DIR, ALIGNMENT_DIR):
                         yield "/".join(parts[index:]), archive.read(info)
@@ -476,7 +481,10 @@ def _open_secret(path: Path) -> int:
     accessories' names, which say what someone owns.
     """
     path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
-    fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
+    # A pre-existing symlink at the path would otherwise be followed, and its
+    # target truncated and filled with key material.
+    flags = os.O_WRONLY | os.O_CREAT | os.O_TRUNC | getattr(os, "O_NOFOLLOW", 0)
+    fd = os.open(path, flags, 0o600)
     os.fchmod(fd, 0o600)
     return fd
 
@@ -583,7 +591,11 @@ def main(argv: list[str] | None = None) -> int:
     def key_source() -> bytes:
         if "key" not in cached:
             if args.key:
-                cached["key"] = bytes.fromhex(args.key)
+                try:
+                    cached["key"] = bytes.fromhex(args.key)
+                except ValueError as err:
+                    msg = "--key must be the hex of the keychain key"
+                    raise ExportError(msg) from err
             elif args.key_file:
                 cached["key"] = key_from_file(args.key_file)
             else:

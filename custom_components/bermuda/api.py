@@ -29,6 +29,7 @@ from __future__ import annotations
 
 from typing import TYPE_CHECKING, Any
 
+import voluptuous as vol
 from bluetooth_data_tools import monotonic_time_coarse
 from homeassistant.core import callback
 from homeassistant.util import slugify
@@ -576,13 +577,41 @@ async def async_remove_findmy_accessory(hass: HomeAssistant, address: str) -> bo
     return bool(removed)
 
 
+# What a value must look like to be written. The options flow coerces the
+# same way; a raw string or a zero written straight into the entry made the
+# reload's coordinator init raise, on this start and every one after it.
+_POSITIVE_NUMBER = vol.All(vol.Coerce(float), vol.Range(min=0, min_included=False))
+_MANAGED_OPTION_SCHEMA = vol.Schema(
+    {
+        vol.Optional("ref_power"): vol.Coerce(float),
+        vol.Optional("attenuation"): _POSITIVE_NUMBER,
+        vol.Optional("max_area_radius"): _POSITIVE_NUMBER,
+        vol.Optional("max_velocity"): _POSITIVE_NUMBER,
+        vol.Optional("devtracker_nothome_timeout"): vol.All(vol.Coerce(int), vol.Range(min=0)),
+        vol.Optional("update_interval"): _POSITIVE_NUMBER,
+        vol.Optional("smoothing_samples"): vol.All(vol.Coerce(int), vol.Range(min=1)),
+        vol.Optional("create_scanner_entities"): vol.Coerce(bool),
+        vol.Optional("tile_identity_probes"): vol.Coerce(bool),
+        vol.Optional("track_categories"): [str],
+        vol.Optional("exclude_devices"): [str],
+    }
+)
+
+
 @callback
 def async_get_options(hass: HomeAssistant) -> dict | None:
-    """The global options a UI may edit (see MANAGED_OPTIONS), current values only."""
-    entry, _coordinator = _entry_and_coordinator(hass)
+    """
+    The global options a UI may edit (see MANAGED_OPTIONS), defaults included.
+
+    The entry only holds what the user has set, so a fresh install answered
+    {} and a UI could not show the values in force; the coordinator's
+    options carry the defaults.
+    """
+    entry, coordinator = _entry_and_coordinator(hass)
     if entry is None:
         return None
-    return {k: v for k, v in entry.options.items() if k in MANAGED_OPTIONS}
+    current = {**(getattr(coordinator, "options", None) or {}), **entry.options}
+    return {k: v for k, v in current.items() if k in MANAGED_OPTIONS}
 
 
 async def async_set_options(hass: HomeAssistant, changes: dict) -> dict | None:
@@ -597,6 +626,11 @@ async def async_set_options(hass: HomeAssistant, changes: dict) -> dict | None:
     unknown = sorted(k for k in changes if k not in MANAGED_OPTIONS)
     if unknown:
         raise ValueError(f"not a managed option: {', '.join(unknown)}")
+    try:
+        changes = _MANAGED_OPTION_SCHEMA(dict(changes))
+    except vol.Invalid as err:
+        msg = f"invalid option value: {err}"
+        raise ValueError(msg) from err
     new_options = {**entry.options, **changes}
     if new_options != dict(entry.options):
         hass.config_entries.async_update_entry(entry, options=new_options)
