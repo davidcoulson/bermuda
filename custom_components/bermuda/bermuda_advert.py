@@ -20,7 +20,6 @@ from typing import TYPE_CHECKING, Final
 from bluetooth_data_tools import monotonic_time_coarse
 
 from .const import (
-    TILE_SERVICE_UUIDS,
     _LOGGER,
     CONF_ATTENUATION,
     CONF_MAX_VELOCITY,
@@ -30,6 +29,7 @@ from .const import (
     DISTANCE_INFINITE,
     DISTANCE_TIMEOUT,
     HIST_KEEP_COUNT,
+    TILE_SERVICE_UUIDS,
 )
 
 # from .const import _LOGGER_SPAM_LESS

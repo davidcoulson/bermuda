@@ -198,10 +198,12 @@ def test_scanner_registry_match_falls_back_to_the_wifi_plus_two_rule(mock_coordi
     neighbour beats any other offset."""
     from types import SimpleNamespace
 
-    proxy = SimpleNamespace(id="p", name="Proxy", name_by_user=None, area_id=None,
-                            connections={("mac", "dc:06:75:4e:89:48")})
-    light = SimpleNamespace(id="l", name="Light", name_by_user=None, area_id=None,
-                            connections={("mac", "dc:06:75:4e:89:4c")})
+    proxy = SimpleNamespace(
+        id="p", name="Proxy", name_by_user=None, area_id=None, connections={("mac", "dc:06:75:4e:89:48")}
+    )
+    light = SimpleNamespace(
+        id="l", name="Light", name_by_user=None, area_id=None, connections={("mac", "dc:06:75:4e:89:4c")}
+    )
     mock_coordinator.dr.async_get_devices = MagicMock(return_value=[light, proxy])
     scanner = BermudaDevice(address="dc:06:75:4e:89:4a", coordinator=mock_coordinator)
     scanner._hascanner = mock_remote_scanner

@@ -35,11 +35,11 @@ from homeassistant.core import callback
 from homeassistant.util import slugify
 
 from .const import (
-    BDADDR_TYPE_RANDOM_RESOLVABLE,
     ADDR_TYPE_FINDMY,
     ADDR_TYPE_IBEACON,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
     ADDR_TYPE_TILE,
+    BDADDR_TYPE_RANDOM_RESOLVABLE,
     CONF_ATTENUATION,
     CONF_DEVICES,
     CONF_REF_POWER,
@@ -61,6 +61,7 @@ SNAPSHOT_VERSION = 1
 def _advert_rank(advert) -> tuple[bool, float]:
     """Which of several adverts from one scanner a snapshot should report."""
     return (getattr(advert, "rssi_distance", None) is not None, getattr(advert, "stamp", None) or 0.0)
+
 
 # Additive capabilities layered on SNAPSHOT_VERSION 1 without changing any
 # existing key. A consumer that wants one of these should feature-detect it
@@ -355,16 +356,16 @@ APPLE_COMPANY_ID = 0x004C
 APPLE_ADV_TYPES = {
     0x02: "ibeacon",
     0x05: "airdrop",
-    0x07: "proximity_pairing",   # AirPods, Beats, other accessories in their case
+    0x07: "proximity_pairing",  # AirPods, Beats, other accessories in their case
     0x09: "airplay_target",
     0x0A: "airplay_source",
-    0x0B: "magic_switch",        # Apple Watch
-    0x0C: "handoff",             # iPhone / iPad / Mac
+    0x0B: "magic_switch",  # Apple Watch
+    0x0C: "handoff",  # iPhone / iPad / Mac
     0x0D: "tethering_target",
     0x0E: "tethering_source",
     0x0F: "nearby_action",
-    0x10: "nearby_info",         # iPhone / iPad / Mac / Watch presence
-    0x12: "findmy",              # offline-finding (AirTag and FindMy-network tags)
+    0x10: "nearby_info",  # iPhone / iPad / Mac / Watch presence
+    0x12: "findmy",  # offline-finding (AirTag and FindMy-network tags)
 }
 
 
@@ -385,7 +386,7 @@ def apple_advert_kinds(manufacturer_data) -> list[str]:
     return kinds
 
 
-def apple_summary(kinds: list[str], address_type: str | None) -> str | None:
+def apple_summary(kinds: list[str], address_type: str | None) -> str | None:  # noqa: PLR0911
     """One phrase for the heard list: what this Apple device most likely is."""
     if "findmy" in kinds:
         return "Find My tag (needs its pairing keys)"
@@ -393,7 +394,9 @@ def apple_summary(kinds: list[str], address_type: str | None) -> str | None:
         return "AirPods / Beats or another accessory"
     if any(k in kinds for k in ("nearby_info", "handoff", "nearby_action", "airdrop", "tethering_source")):
         rotates = address_type == BDADDR_TYPE_RANDOM_RESOLVABLE
-        return "iPhone / iPad / Mac / Watch" + (" (rotating address: track it as a Private BLE Device with its IRK)" if rotates else "")
+        return "iPhone / iPad / Mac / Watch" + (
+            " (rotating address: track it as a Private BLE Device with its IRK)" if rotates else ""
+        )
     if "magic_switch" in kinds:
         return "Apple Watch"
     if any(k in kinds for k in ("airplay_target", "airplay_source")):
@@ -401,7 +404,6 @@ def apple_summary(kinds: list[str], address_type: str | None) -> str | None:
     if kinds:
         return "Apple device"
     return None
-
 
 
 @callback
@@ -441,7 +443,7 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
         if address_type == ADDR_TYPE_TILE:
             kind, config_value = "tile", address.upper()
         elif is_tile:
-            from .bermuda_tile import tile_metadevice_id  # noqa: PLC0415
+            from .bermuda_tile import tile_metadevice_id
 
             kind, config_value = "tile", tile_metadevice_id(address).upper()
         elif address_type == ADDR_TYPE_IBEACON:
@@ -453,13 +455,16 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
         best_rssi = max((a.rssi for a in fresh if getattr(a, "rssi", None) is not None), default=None)
         # Which scanners heard it in the last minute, so a consumer that only
         # cares about its own placed proxies can drop what a stray one hears.
-        scanner_addresses = sorted({str(getattr(a, "scanner_address", "")).lower() for a in fresh if getattr(a, "scanner_address", None)})
+        scanner_addresses = sorted(
+            {str(getattr(a, "scanner_address", "")).lower() for a in fresh if getattr(a, "scanner_address", None)}
+        )
         latest_mfr = next((a.manufacturer_data[0] for a in fresh if getattr(a, "manufacturer_data", None)), None)
         apple_kinds = apple_advert_kinds(latest_mfr)
         heard_by = sorted(
             (
                 {"address": str(a.scanner_address).lower(), "rssi": a.rssi}
-                for a in fresh if getattr(a, "scanner_address", None) and getattr(a, "rssi", None) is not None
+                for a in fresh
+                if getattr(a, "scanner_address", None) and getattr(a, "rssi", None) is not None
             ),
             key=lambda h: -h["rssi"],
         )
@@ -480,7 +485,7 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
                 "last_seen_age": nowstamp - last_seen,
                 "first_seen_age": (nowstamp - device.first_seen) if getattr(device, "first_seen", None) else None,
                 "scanner_addresses": scanner_addresses,
-                "heard_by": heard_by,   # loudest first
+                "heard_by": heard_by,  # loudest first
                 "apple_kinds": apple_kinds,
                 "apple_summary": apple_summary(apple_kinds, address_type),
                 "scanners": len(fresh),
@@ -507,7 +512,7 @@ async def async_set_tracked_devices(hass: HomeAssistant, add=(), remove=()) -> l
     remove_set = {str(a).upper() for a in remove}
     new = [a for a in current if a not in remove_set]
     for a in add:
-        a = str(a).upper()
+        a = str(a).upper()  # noqa: PLW2901
         if a and a not in new:
             new.append(a)
     if new != current:
@@ -544,11 +549,12 @@ def async_get_findmy_accessories(hass: HomeAssistant) -> list[dict] | None:
 
 
 async def async_add_findmy_accessory(hass: HomeAssistant, accessory_json: str, name: str | None = None) -> dict | None:
-    """Add a FindMy accessory from its exported key JSON, as the options flow does.
+    """
+    Add a FindMy accessory from its exported key JSON, as the options flow does.
 
     Raises FindMyKeyError on bad input. Returns None if Bermuda is not set up.
     """
-    from .bermuda_findmy import FindMyAccessoryKeys  # noqa: PLC0415
+    from .bermuda_findmy import FindMyAccessoryKeys
 
     entry, coordinator = _entry_and_coordinator(hass)
     if entry is None or coordinator is None:
@@ -557,7 +563,9 @@ async def async_add_findmy_accessory(hass: HomeAssistant, accessory_json: str, n
     if name and name.strip():
         accessory.name = name.strip()
     coordinator.findmy_manager.add_accessory(accessory)
-    hass.config_entries.async_update_entry(entry, data={**entry.data, CONFDATA_FINDMY: coordinator.findmy_manager.dump()})
+    hass.config_entries.async_update_entry(
+        entry, data={**entry.data, CONFDATA_FINDMY: coordinator.findmy_manager.dump()}
+    )
     return {"address": accessory.address, "name": accessory.friendly_name}
 
 
@@ -625,7 +633,8 @@ async def async_set_options(hass: HomeAssistant, changes: dict) -> dict | None:
         return None
     unknown = sorted(k for k in changes if k not in MANAGED_OPTIONS)
     if unknown:
-        raise ValueError(f"not a managed option: {', '.join(unknown)}")
+        msg = f"not a managed option: {', '.join(unknown)}"
+        raise ValueError(msg)
     try:
         changes = _MANAGED_OPTION_SCHEMA(dict(changes))
     except vol.Invalid as err:
@@ -875,18 +884,22 @@ def async_get_advert_snapshot(
 
 
 def async_get_tile_identities(hass: HomeAssistant) -> dict[str, Any] | None:
-    """Every Tile ID Bermuda has read, with where that Tile is now (see
-    BermudaTileManager.identities). None if Bermuda is not set up."""
+    """
+    Every Tile ID Bermuda has read, with where that Tile is now (see
+    BermudaTileManager.identities). None if Bermuda is not set up.
+    """
     coordinator = async_get_coordinator(hass)
     manager = getattr(coordinator, "tile_manager", None)
     return None if manager is None else manager.identities()
 
 
 async def async_bind_tile(hass: HomeAssistant, tile_id: str, uid: str) -> dict[str, Any] | None:
-    """Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``
+    """
+    Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``
     and bind its live address now if one is known. Raises ValueError for an
     unknown Tile or an ID already declared as another Tile's. None if Bermuda
-    is not set up."""
+    is not set up.
+    """
     coordinator = async_get_coordinator(hass)
     manager = getattr(coordinator, "tile_manager", None)
     if manager is None:
@@ -896,9 +909,11 @@ async def async_bind_tile(hass: HomeAssistant, tile_id: str, uid: str) -> dict[s
 
 
 async def async_bind_tile_address(hass: HomeAssistant, tile_id: str, address: str) -> dict[str, Any] | None:
-    """Declare that configured Tile ``tile_id`` is the tag at ``address`` now
+    """
+    Declare that configured Tile ``tile_id`` is the tag at ``address`` now
     (the user identified it by where it is). Raises ValueError for an unknown
-    Tile or address. None if Bermuda is not set up."""
+    Tile or address. None if Bermuda is not set up.
+    """
     coordinator = async_get_coordinator(hass)
     manager = getattr(coordinator, "tile_manager", None)
     if manager is None:

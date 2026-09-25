@@ -187,6 +187,8 @@ def test_async_update_data_internal_single_pass_per_device():
     mock_dispatch.assert_called_once_with(coordinator.hass, SIGNAL_DEVICE_NEW, "tracked")
 
     assert coordinator.last_update_success is True
+
+
 def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
     """A device listed twice in prune_list must not crash the update cycle.
 

@@ -619,9 +619,9 @@ def test_fresh_sighting_collapses_the_window_even_when_pairing_runs_ahead():
     width = top - bottom + 1
     # A handful of indices: the lookahead, the lookbehind slack and little else -
     # emphatically not the ~2000 that taking the pairing bound unconditionally gave.
-    assert width <= FINDMY_LOOKBEHIND_INDICES + FINDMY_LOOKAHEAD_INDICES + 4, (
-        f"a fresh sighting must collapse the window, got {width} indices"
-    )
+    assert (
+        width <= FINDMY_LOOKBEHIND_INDICES + FINDMY_LOOKAHEAD_INDICES + 4
+    ), f"a fresh sighting must collapse the window, got {width} indices"
 
     # Stale alignment still widens, so a bad anchor cannot lock the accessory out.
     acc._alignment = (now - timedelta(days=1), pairing_index - 2000)  # noqa: SLF001

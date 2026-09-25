@@ -22,8 +22,8 @@ from homeassistant.helpers.selector import (
     TextSelectorConfig,
 )
 
-from .bermuda_tile import tile_metadevice_id
 from .bermuda_findmy import FindMyAccessoryKeys, FindMyKeyError
+from .bermuda_tile import tile_metadevice_id
 from .const import (
     ADDR_TYPE_FINDMY,
     ADDR_TYPE_IBEACON,
@@ -311,8 +311,7 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 options_metadevices.append(
                     SelectOptionDict(
                         value=device.address.upper(),
-                        label=f"Tile: {device.address} {source_mac} "
-                        f"{name if device.address != name else ''}",
+                        label=f"Tile: {device.address} {source_mac} " f"{name if device.address != name else ''}",
                     )
                 )
                 continue

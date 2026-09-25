@@ -17,8 +17,6 @@ from homeassistant.helpers.dispatcher import async_dispatcher_connect
 
 from .const import (
     _LOGGER,
-    ADDR_TYPE_IBEACON,
-    ADDR_TYPE_PRIVATE_BLE_DEVICE,
     CONF_CREATE_SCANNER_ENTITIES,
     DEFAULT_CREATE_SCANNER_ENTITIES,
     METADEVICE_DEVICETYPES,

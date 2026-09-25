@@ -188,8 +188,8 @@ def decrypt_record(raw: bytes, key: bytes) -> dict[str, Any]:
     the record itself. Apple stores the tag separately from the ciphertext;
     ``cryptography`` wants them joined, in that order.
     """
-    from cryptography.exceptions import InvalidTag  # noqa: PLC0415
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM  # noqa: PLC0415
+    from cryptography.exceptions import InvalidTag
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
 
     try:
         parts = plistlib.loads(raw)
@@ -373,7 +373,7 @@ def _key_data(record: dict[str, Any], field: str) -> bytes:
     except (KeyError, TypeError) as err:
         msg = f"Record has no usable '{field}'"
         raise ExportError(msg) from err
-    if not isinstance(data, (bytes, bytearray)):
+    if not isinstance(data, bytes | bytearray):
         msg = f"Field '{field}' is not key data"
         raise ExportError(msg)
     return bytes(data)

@@ -46,8 +46,8 @@ def test_uuid16_only_accepts_a_16_bit_id():
     assert _uuid16("0000feed-0000-1000-8000-00805f9b34fb") == 0xFEED
     assert _uuid16("feed") == 0xFEED and _uuid16(0xFEED) == 0xFEED
     assert _uuid16("0xfeed") == 0xFEED
-    assert _uuid16("1eeb698c-d313-40f5-bb29-51c656299c5d") is None   # a custom 128-bit uuid
-    assert _uuid16("1234feed-0000-1000-8000-00805f9b34fb") is None   # 32-bit in the SIG base
+    assert _uuid16("1eeb698c-d313-40f5-bb29-51c656299c5d") is None  # a custom 128-bit uuid
+    assert _uuid16("1234feed-0000-1000-8000-00805f9b34fb") is None  # 32-bit in the SIG base
     assert _uuid16(None) is None and _uuid16("") is None and _uuid16(-1) is None and _uuid16(0x10000) is None
     assert _uuid16("zzzz") is None
 

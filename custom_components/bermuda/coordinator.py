@@ -18,7 +18,6 @@ from homeassistant.components.bluetooth.api import _get_manager
 from homeassistant.const import MAJOR_VERSION as HA_VERSION_MAJ
 from homeassistant.const import MINOR_VERSION as HA_VERSION_MIN
 from homeassistant.const import Platform
-from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.core import (
     Event,
     HomeAssistant,
@@ -27,6 +26,7 @@ from homeassistant.core import (
     SupportsResponse,
     callback,
 )
+from homeassistant.exceptions import HomeAssistantError, Unauthorized
 from homeassistant.helpers import (
     area_registry as ar,
 )
@@ -74,8 +74,8 @@ from .const import (
     CONF_MAX_VELOCITY,
     CONF_REF_POWER,
     CONF_RSSI_OFFSETS,
-    CONF_TILE_PROBES,
     CONF_SMOOTHING_SAMPLES,
+    CONF_TILE_PROBES,
     CONF_UPDATE_INTERVAL,
     CONFDATA_FINDMY,
     DEFAULT_ATTENUATION,
@@ -433,7 +433,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                     if scanner_address in changed:
                         advert.conf_rssi_offset = changed[scanner_address]
                         if getattr(advert, "rssi", None) is not None:
-                            advert._update_raw_distance(reading_is_new=False)
+                            advert._update_raw_distance(reading_is_new=False)  # noqa: SLF001
             _LOGGER.debug("Applied rssi offsets in memory for %d scanner(s)", len(changed))
         return wanted
 
@@ -1713,11 +1713,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 continue
 
             # If we are too far away or don't have an area, we cannot win...
-            if (
-                challenger.rssi_distance is None
-                or challenger.rssi_distance > _max_radius
-                or challenger.area_id is None
-            ):
+            if challenger.rssi_distance is None or challenger.rssi_distance > _max_radius or challenger.area_id is None:
                 continue
 
             # At this point the challenger is a vaild contender...
@@ -1726,9 +1722,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
             # If closest scanner lacks critical data, we win.
             if (
-                incumbent is None
-                or incumbent.rssi_distance is None
-                or incumbent.area_id is None
+                incumbent is None or incumbent.rssi_distance is None or incumbent.area_id is None
                 # Extra checks that are redundant but make linting easier later...
                 # or closest_advert.hist_distance_by_interval is None
             ):
@@ -1799,8 +1793,12 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             pdiff_historical = 0.15  # Percentage difference required to win on historical test
             if len(challenger.hist_distance_by_interval) > min_history:  # we have enough history, let's go..
                 tests.hist_min_max = (
-                    min(incumbent.hist_distance_by_interval[:history_window]),  # The closest that the incumbent has been
-                    max(challenger.hist_distance_by_interval[:history_window]),  # The **furthest** we have been in that time
+                    min(
+                        incumbent.hist_distance_by_interval[:history_window]
+                    ),  # The closest that the incumbent has been
+                    max(
+                        challenger.hist_distance_by_interval[:history_window]
+                    ),  # The **furthest** we have been in that time
                 )
                 if (
                     tests.hist_min_max[1] < tests.hist_min_max[0]
@@ -1949,34 +1947,37 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     # --- device management services (thin wrappers over api.py) -----------------
 
     async def service_track_devices(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
-        devices = await api.async_set_tracked_devices(self.hass, add=call.data.get("add", []), remove=call.data.get("remove", []))
+        devices = await api.async_set_tracked_devices(
+            self.hass, add=call.data.get("add", []), remove=call.data.get("remove", [])
+        )
         return {"configured_devices": devices or []}
 
     async def service_list_device_candidates(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
         return {"candidates": api.async_get_device_candidates(self.hass, max_age=call.data.get("max_age", 7200)) or []}
 
     async def service_add_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
-        from .bermuda_findmy import FindMyKeyError  # noqa: PLC0415
+        from . import api
+        from .bermuda_findmy import FindMyKeyError
 
         try:
             added = await api.async_add_findmy_accessory(self.hass, call.data["accessory_json"], call.data.get("name"))
         except FindMyKeyError as err:
-            raise HomeAssistantError(f"Invalid FindMy accessory keys: {err}") from err
+            msg = f"Invalid FindMy accessory keys: {err}"
+            raise HomeAssistantError(msg) from err
         return added or {}
 
     async def service_remove_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
         removed = await api.async_remove_findmy_accessory(self.hass, call.data["address"])
         return {"removed": bool(removed)}
 
     async def service_set_options(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
         try:
             options = await api.async_set_options(self.hass, dict(call.data["options"]))
@@ -1985,7 +1986,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return {"options": options or {}}
 
     async def service_bind_tile_address(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
         try:
             bound = await api.async_bind_tile_address(self.hass, call.data["tile_id"], call.data["address"])
@@ -1994,7 +1995,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return bound or {}
 
     async def service_bind_tile(self, call: ServiceCall) -> ServiceResponse:
-        from . import api  # noqa: PLC0415
+        from . import api
 
         try:
             bound = await api.async_bind_tile(self.hass, call.data["tile_id"], call.data["tile_uid"])

@@ -34,15 +34,20 @@ from custom_components.bermuda.const import (
 TILE_ADVERT = AdvertisementData(
     local_name=None,
     manufacturer_data={},
-    service_data={},          # measured: this hardware carries no service data at all
+    service_data={},  # measured: this hardware carries no service data at all
     service_uuids=[TILE_SERVICE_UUID],
     tx_power=None,
     rssi=-71,
     platform_data=(),
 )
 PLAIN_ADVERT = AdvertisementData(
-    local_name="not a tile", manufacturer_data={}, service_data={},
-    service_uuids=["0000180f-0000-1000-8000-00805f9b34fb"], tx_power=None, rssi=-60, platform_data=(),
+    local_name="not a tile",
+    manufacturer_data={},
+    service_data={},
+    service_uuids=["0000180f-0000-1000-8000-00805f9b34fb"],
+    tx_power=None,
+    rssi=-60,
+    platform_data=(),
 )
 
 
@@ -88,7 +93,7 @@ def test_non_tile_advert_changes_nothing(mock_coordinator):
 
 def test_tile_metadevice_address_is_recognised(mock_coordinator):
     device = BermudaDevice(address="TILE_2910B2BCA85A", coordinator=mock_coordinator)
-    assert device.address == "tile_2910b2bca85a"          # mac_norm leaves it alone but lower-cases
+    assert device.address == "tile_2910b2bca85a"  # mac_norm leaves it alone but lower-cases
     assert device.address_type == ADDR_TYPE_TILE
     assert METADEVICE_TILE_DEVICE in device.metadevice_type
     assert device.is_tile is True
@@ -109,14 +114,28 @@ def _dev(address, first, last, rssi_by_scanner, *, is_tile=True):
     adverts = {}
     for scanner, hist in rssi_by_scanner.items():
         adverts[(address, scanner)] = SimpleNamespace(
-            scanner_address=scanner, hist_rssi=list(hist), rssi=hist[0], name=scanner,
-            hist_stamp=[last], service_data=[], manufacturer_data=[], local_name=[],
+            scanner_address=scanner,
+            hist_rssi=list(hist),
+            rssi=hist[0],
+            name=scanner,
+            hist_stamp=[last],
+            service_data=[],
+            manufacturer_data=[],
+            local_name=[],
             service_uuids=[TILE_SERVICE_UUID],
         )
     return SimpleNamespace(
-        address=address, is_tile=is_tile, first_seen=first, last_seen=last, adverts=adverts,
-        metadevice_sources=[], metadevice_type=set(), name=address, create_sensor=False,
-        address_type="bd_addr_random_unresolvable", ref_power=-53.0,
+        address=address,
+        is_tile=is_tile,
+        first_seen=first,
+        last_seen=last,
+        adverts=adverts,
+        metadevice_sources=[],
+        metadevice_type=set(),
+        name=address,
+        create_sensor=False,
+        address_type="bd_addr_random_unresolvable",
+        ref_power=-53.0,
     )
 
 
@@ -167,7 +186,7 @@ def test_manager_seeds_and_rebinds_across_a_rotation():
 
     meta = coord.metadevices[tile_id]
     assert meta.create_sensor is True
-    assert manager.bindings[tile_id] == [b.address, a.address]     # B re-bound, A kept as history
+    assert manager.bindings[tile_id] == [b.address, a.address]  # B re-bound, A kept as history
     assert meta.metadevice_sources[0] == b.address
     assert METADEVICE_TYPE_TILE_SOURCE in b.metadevice_type
     assert manager.handovers == 1 and manager.ambiguous_handovers == 0
@@ -203,7 +222,7 @@ def test_manager_refuses_an_ambiguous_handover():
 def test_manager_rejects_a_candidate_that_appeared_too_late_or_too_far():
     now = 10_000.0
     a, b, _ = _house(now)
-    b.first_seen = a.last_seen + TILE_HANDOVER_WINDOW + 30       # not a handover: appeared much later
+    b.first_seen = a.last_seen + TILE_HANDOVER_WINDOW + 30  # not a handover: appeared much later
     far = _dev("2a:fe:fc:10:70:fc", now - 50, now - 5, {"s1": [-88, -89, -88], "s2": [-95, -96, -95]})
     tile_id = tile_metadevice_id(a.address)
     coord = _Coord({d.address: d for d in (a, b, far)}, configured=[tile_id])
@@ -277,7 +296,7 @@ def test_tile_capture_reports_each_raw_tile_address():
     finally:
         bermuda_tile.monotonic_time_coarse = orig
     by_addr = {r["address"]: r for r in rows}
-    assert set(by_addr) == {a.address, b.address, c.address}          # the metadevice itself is not a row
+    assert set(by_addr) == {a.address, b.address, c.address}  # the metadevice itself is not a row
     assert by_addr[a.address]["top_bits"] == "0b00" and by_addr[a.address]["bound_to"] == tile_id
     assert by_addr[b.address]["bound_to"] == tile_id and by_addr[c.address]["bound_to"] is None
     assert by_addr[b.address]["scanners"]["s1"]["hist_rssi"] == [-69, -72, -70]
@@ -326,7 +345,7 @@ def test_identity_resolves_a_rotation_the_heuristic_cannot():
         manager._probe_fn = fake_probe
         manager.bindings[tile_id] = [a.address]
 
-        manager.async_update(nowstamp=now)          # A's id is read first, then both candidates are asked
+        manager.async_update(nowstamp=now)  # A's id is read first, then both candidates are asked
         await asyncio.gather(*coord.hass.tasks)
         assert manager.uids[tile_id] == "cafe01" and probed[0] == a.address
         assert set(probed) == {a.address, b.address, c.address}
@@ -351,17 +370,17 @@ def test_heuristic_is_the_fallback_when_nothing_can_be_read():
         coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
         manager = BermudaTileManager(coord)
         coord.hass = manager._hass = _Hass()
-        manager.uids[tile_id] = "cafe01"            # known id, but no proxy can connect right now
+        manager.uids[tile_id] = "cafe01"  # known id, but no proxy can connect right now
 
         async def unavailable(hass, address):
-            raise bermuda_tile.TileProbeUnavailable("no connectable scanner")
+            raise bermuda_tile.TileProbeUnavailableError("no connectable scanner")
 
         manager._probe_fn = unavailable
         manager.bindings[tile_id] = [a.address]
-        manager.async_update(nowstamp=now)          # probes queued, undecided this cycle
+        manager.async_update(nowstamp=now)  # probes queued, undecided this cycle
         assert manager.bindings[tile_id][0] == a.address
         await asyncio.gather(*coord.hass.tasks)
-        manager.async_update(nowstamp=now + 1)      # every candidate unreachable: RSSI heuristic decides
+        manager.async_update(nowstamp=now + 1)  # every candidate unreachable: RSSI heuristic decides
         assert manager.bindings[tile_id][0] == b.address
         assert manager.last_handover["reason"] == "rssi pattern"
         assert manager.diagnostics()["probe_failures"] == 2
@@ -414,16 +433,16 @@ def test_probe_results_are_not_repeated_and_failures_retry_later(monkeypatch):
         manager._probe_fn = flaky
         manager._request_probe("aa:00:00:00:00:01")
         await asyncio.gather(*coord.hass.tasks)
-        manager._request_probe("aa:00:00:00:00:01")           # failed 0 s ago: not retried yet
+        manager._request_probe("aa:00:00:00:00:01")  # failed 0 s ago: not retried yet
         assert calls == ["aa:00:00:00:00:01"]
         clock["t"] += bermuda_tile.TILE_PROBE_RETRY_SECS + 1
-        manager._request_probe("aa:00:00:00:00:01")           # retry due, but not heard for 2 min: no probe
+        manager._request_probe("aa:00:00:00:00:01")  # retry due, but not heard for 2 min: no probe
         assert len(calls) == 1
-        dev.last_seen = clock["t"]                             # heard again
+        dev.last_seen = clock["t"]  # heard again
         manager._request_probe("aa:00:00:00:00:01")
         await asyncio.gather(*coord.hass.tasks)
         assert len(calls) == 2
-        manager._request_probe("aa:00:00:00:00:01")           # answered: never asked again
+        manager._request_probe("aa:00:00:00:00:01")  # answered: never asked again
         assert len(calls) == 2 and manager._probes["aa:00:00:00:00:01"]["uid"] == "cafe01"
 
     asyncio.run(scenario())
@@ -442,19 +461,19 @@ def test_a_heuristic_handover_forgets_a_no_id_answer_so_the_new_address_is_asked
         async def probe(hass, address):
             asked.append(address)
             if address == a.address:
-                raise bermuda_tile.TileNoIdCharacteristic("feed[0018,0019]")
+                raise bermuda_tile.TileNoIdCharacteristicError("feed[0018,0019]")
             return "cafe01"
 
         manager._probe_fn = probe
         manager.bindings[tile_id] = [a.address]
-        manager.async_update(nowstamp=now)              # learns: "no id" from A; B and C asked as candidates
+        manager.async_update(nowstamp=now)  # learns: "no id" from A; B and C asked as candidates
         await asyncio.gather(*coord.hass.tasks)
         assert manager.uids[tile_id] == "" and manager._probes[a.address]["error"] is None
         assert manager.last_probe["address"] in (b.address, c.address)
         assert manager._probes[a.address]["uid"] is None and asked[0] == a.address
-        manager.async_update(nowstamp=now + 1)          # A quiet: heuristic binds B, whose answer becomes the Tile's id
+        manager.async_update(nowstamp=now + 1)  # A quiet: heuristic binds B, whose answer becomes the Tile's id
         assert manager.bindings[tile_id][0] == b.address and manager.uids[tile_id] == "cafe01"
-        manager.async_update(nowstamp=now + 2)          # nothing left to ask
+        manager.async_update(nowstamp=now + 2)  # nothing left to ask
         await asyncio.gather(*coord.hass.tasks)
         assert sorted(asked) == sorted([a.address, b.address, c.address])
 
@@ -465,6 +484,7 @@ def test_a_tile_whose_id_was_never_read_still_hands_over_by_rssi():
     """Regression: with probing possible but the ID unknown, the manager used
     to wait for a read of the bound address - which had rotated away, so the
     read could never happen and the Tile was lost for good."""
+
     async def scenario():
         now = 10_000.0
         a, b, c = _house(now)
@@ -474,7 +494,7 @@ def test_a_tile_whose_id_was_never_read_still_hands_over_by_rssi():
         coord.hass = manager._hass = _Hass()
 
         async def unavailable(hass, address):
-            raise bermuda_tile.TileProbeUnavailable("no connectable scanner")
+            raise bermuda_tile.TileProbeUnavailableError("no connectable scanner")
 
         manager._probe_fn = unavailable
         manager.bindings[tile_id] = [a.address]
@@ -500,14 +520,14 @@ def test_the_successor_lends_its_id_to_a_tile_that_never_answered():
 
         async def probe(hass, address):
             if address == a.address:
-                raise bermuda_tile.TileProbeUnavailable("gone")
+                raise bermuda_tile.TileProbeUnavailableError("gone")
             return {b.address: "beef02", c.address: "cafe01"}[address]
 
         manager._probe_fn = probe
         manager.bindings[tile_id] = [a.address]
         manager.async_update(nowstamp=now)
         await asyncio.gather(*coord.hass.tasks)
-        manager.async_update(nowstamp=now + 1)          # RSSI picks B; B's answer is now this Tile's id
+        manager.async_update(nowstamp=now + 1)  # RSSI picks B; B's answer is now this Tile's id
         assert manager.bindings[tile_id][0] == b.address
         assert manager.uids[tile_id] == "beef02"
         assert manager.diagnostics()["probe_results"][b.address]["uid"] == "beef02"
@@ -519,7 +539,7 @@ def test_an_address_no_longer_heard_is_never_probed():
     async def scenario():
         now = 10_000.0
         a, b, c = _house(now)
-        a.last_seen = now - 1000                         # rotated away long ago
+        a.last_seen = now - 1000  # rotated away long ago
         tile_id = tile_metadevice_id(a.address)
         coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
         manager = BermudaTileManager(coord)
@@ -528,13 +548,13 @@ def test_an_address_no_longer_heard_is_never_probed():
 
         async def probe(hass, address):
             asked.append(address)
-            raise bermuda_tile.TileProbeUnavailable("gone")
+            raise bermuda_tile.TileProbeUnavailableError("gone")
 
         manager._probe_fn = probe
         manager.bindings[tile_id] = [a.address]
         manager.async_update(nowstamp=now)
         await asyncio.gather(*coord.hass.tasks)
-        assert a.address not in asked                     # nothing to connect to
+        assert a.address not in asked  # nothing to connect to
         assert manager.diagnostics()["probes"] == len(asked)
 
     asyncio.run(scenario())
@@ -543,12 +563,13 @@ def test_an_address_no_longer_heard_is_never_probed():
 def test_an_orphaned_tile_is_recovered_by_identity():
     """The bound address rotated while Bermuda was down: no window, no
     heuristic - every live Tile is asked, and the one with our ID is bound."""
+
     async def scenario():
         now = 10_000.0
         a, b, c = _house(now)
         tile_id = tile_metadevice_id(a.address)
-        b.first_seen = c.first_seen = now - 3000            # long-lived: not handover candidates
-        coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])   # A never heard
+        b.first_seen = c.first_seen = now - 3000  # long-lived: not handover candidates
+        coord = _Coord({d.address: d for d in (b, c)}, configured=[tile_id.upper()])  # A never heard
         manager = BermudaTileManager(coord)
         coord.hass = manager._hass = _Hass()
         manager.uids[tile_id] = "cafe01"
@@ -558,11 +579,11 @@ def test_an_orphaned_tile_is_recovered_by_identity():
 
         manager._probe_fn = probe
         manager.bindings[tile_id] = [a.address]
-        manager.async_update(nowstamp=now)                  # just started: not declared gone yet
+        manager.async_update(nowstamp=now)  # just started: not declared gone yet
         assert not coord.hass.tasks
         later = now + bermuda_tile.TILE_SILENT_SECS + 1
         b.last_seen = c.last_seen = later
-        manager.async_update(nowstamp=later)                # orphan: both live Tiles asked
+        manager.async_update(nowstamp=later)  # orphan: both live Tiles asked
         await asyncio.gather(*coord.hass.tasks)
         manager.async_update(nowstamp=later + 1)
         assert manager.bindings[tile_id][0] == c.address
@@ -592,7 +613,7 @@ def test_an_orphaned_tile_with_an_unknown_id_learns_its_neighbours_but_binds_not
         manager.async_update(nowstamp=later)
         await asyncio.gather(*coord.hass.tasks)
         manager.async_update(nowstamp=later + 1)
-        assert manager.bindings[tile_id][0] == a.address    # nothing to compare against
+        assert manager.bindings[tile_id][0] == a.address  # nothing to compare against
         results = manager.diagnostics()["probe_results"]
         assert results[b.address]["uid"] == "beef02" and results[c.address]["uid"] == "cafe01"
         assert manager.diagnostics()["bound_age"][tile_id] is None
@@ -634,7 +655,12 @@ def test_tdi_read_frames_the_request_and_parses_the_tile_id():
         uid = await bermuda_tile._read_uid_over_mep(client)
         assert uid == "0011223344556677"
         (req,) = client.writes
-        assert req[0] == 0 and len(req) == 7 and req[5] == bermuda_tile.TOA_CMD_TDI and req[6] == bermuda_tile.TDI_READ_TILE_ID
+        assert (
+            req[0] == 0
+            and len(req) == 7
+            and req[5] == bermuda_tile.TOA_CMD_TDI
+            and req[6] == bermuda_tile.TDI_READ_TILE_ID
+        )
         assert client.stopped
         # the broadcast connectionless id is accepted too
         client = _MepClient(b"\x02" + bytes.fromhex("8877665544332211"), echo_cid=False)
@@ -645,7 +671,7 @@ def test_tdi_read_frames_the_request_and_parses_the_tile_id():
 
 def test_tdi_read_reports_no_id_and_silence():
     async def scenario():
-        with pytest.raises(bermuda_tile.TileNoIdCharacteristic):
+        with pytest.raises(bermuda_tile.TileNoIdCharacteristicError):
             await bermuda_tile._read_uid_over_mep(_MepClient(bytes([bermuda_tile.TDI_ERROR, 1])))
         with pytest.raises(asyncio.TimeoutError):
             await bermuda_tile._read_uid_over_mep(_MepClient(None), timeout=0.05)
@@ -656,11 +682,12 @@ def test_tdi_read_reports_no_id_and_silence():
 def test_the_address_a_tile_switches_to_after_a_probe_inherits_the_answer(monkeypatch):
     """Connecting makes a Tile rotate; the new address must not be connected
     to again (that would rotate it again, forever) - it inherits the answer."""
+
     async def scenario():
         clock = {"t": 10_000.0}
         monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
         now = clock["t"]
-        a, b, c = _house(now)                     # B matches A's RSSI pattern, C does not
+        a, b, c = _house(now)  # B matches A's RSSI pattern, C does not
         a.last_seen = now - 1
         tile_id = tile_metadevice_id(a.address)
         coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
@@ -684,9 +711,9 @@ def test_the_address_a_tile_switches_to_after_a_probe_inherits_the_answer(monkey
         manager._request_probe(b.address, nowstamp=clock["t"])
         manager._request_probe(c.address, nowstamp=clock["t"])
         await asyncio.gather(*coord.hass.tasks)
-        assert asked == [a.address, c.address]     # B inherited, C (a different pattern) was asked
+        assert asked == [a.address, c.address]  # B inherited, C (a different pattern) was asked
         assert manager._probes[b.address]["inherited_from"] == a.address
-        assert manager.bindings[tile_id][0] == b.address   # inherited id == ours: bound at once
+        assert manager.bindings[tile_id][0] == b.address  # inherited id == ours: bound at once
         diag = manager.diagnostics()
         assert diag["probes_inherited"] == 1 and diag["probe_results"][b.address]["inherited_from"] == a.address
 
@@ -699,7 +726,12 @@ def test_the_connection_budget_caps_probing(monkeypatch):
         monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
         devices = {}
         for i in range(bermuda_tile.TILE_PROBE_BUDGET + 3):
-            d = _dev(f"aa:00:00:00:00:{i:02x}", clock["t"] - 100, clock["t"], {"s1": [-60 - i, -60 - i, -60 - i], "s2": [-90, -90, -90]})
+            d = _dev(
+                f"aa:00:00:00:00:{i:02x}",
+                clock["t"] - 100,
+                clock["t"],
+                {"s1": [-60 - i, -60 - i, -60 - i], "s2": [-90, -90, -90]},
+            )
             devices[d.address] = d
         coord = _Coord(devices, configured=[])
         manager = BermudaTileManager(coord)
@@ -708,7 +740,7 @@ def test_the_connection_budget_caps_probing(monkeypatch):
 
         async def probe(hass, address):
             asked.append(address)
-            raise bermuda_tile.TileProbeUnavailable("busy")
+            raise bermuda_tile.TileProbeUnavailableError("busy")
 
         manager._probe_fn = probe
         for address in devices:
@@ -716,7 +748,7 @@ def test_the_connection_budget_caps_probing(monkeypatch):
         await asyncio.gather(*coord.hass.tasks)
         assert len(asked) == bermuda_tile.TILE_PROBE_BUDGET
         assert manager.diagnostics()["probe_budget_left"] == 0
-        clock["t"] += bermuda_tile.TILE_PROBE_BUDGET_SECS + 1   # the hour passes: the budget refills
+        clock["t"] += bermuda_tile.TILE_PROBE_BUDGET_SECS + 1  # the hour passes: the budget refills
         for d in devices.values():
             d.last_seen = clock["t"]
         manager._request_probe(list(devices)[-1], nowstamp=clock["t"])
@@ -749,12 +781,12 @@ def test_identities_and_bind_by_uid(monkeypatch):
         later = now + bermuda_tile.TILE_SILENT_SECS + 1
         clock["t"] = later
         b.last_seen = c.last_seen = later
-        manager.async_update(nowstamp=later)          # orphan sweep: both asked
+        manager.async_update(nowstamp=later)  # orphan sweep: both asked
         await asyncio.gather(*coord.hass.tasks)
         ids = manager.identities()
         assert set(ids) == {"beef02", "cafe01"}
         assert ids["cafe01"]["addresses"] == [c.address] and ids["cafe01"]["tile_id"] is None
-        assert ids["cafe01"]["strongest"]["scanner"] == "s2"   # C is loudest on s2 (-60)
+        assert ids["cafe01"]["strongest"]["scanner"] == "s2"  # C is loudest on s2 (-60)
         assert ids["beef02"]["strongest"]["scanner"] == "s1"
         # The user says: my Tile is cafe01.
         assert manager.bind_by_uid(tile_id.upper(), "CAFE01") == c.address
@@ -762,12 +794,12 @@ def test_identities_and_bind_by_uid(monkeypatch):
         assert manager.last_handover["reason"] == "tile id (user)"
         assert manager.identities()["cafe01"]["tile_id"] == tile_id
         with pytest.raises(ValueError):
-            manager.bind_by_uid("tile_000000000000", "cafe01")   # not a configured Tile
+            manager.bind_by_uid("tile_000000000000", "cafe01")  # not a configured Tile
         other = "tile_aaaaaaaaaaaa"
         coord.options[CONF_DEVICES].append(other.upper())
         with pytest.raises(ValueError):
-            manager.bind_by_uid(other, "cafe01")                # already declared as ours
-        assert manager.bind_by_uid(other, "deadbeef00000000") is None   # remembered, nothing live carries it
+            manager.bind_by_uid(other, "cafe01")  # already declared as ours
+        assert manager.bind_by_uid(other, "deadbeef00000000") is None  # remembered, nothing live carries it
 
     asyncio.run(scenario())
 
@@ -791,20 +823,20 @@ def test_orphan_sweeps_are_paced():
         manager.async_update(nowstamp=now)
         t1 = now + bermuda_tile.TILE_SILENT_SECS + 1
         b.last_seen = t1
-        manager.async_update(nowstamp=t1)               # first sweep asks B
+        manager.async_update(nowstamp=t1)  # first sweep asks B
         await asyncio.gather(*coord.hass.tasks)
         assert asked == [b.address]
-        coord.devices[c.address] = c                    # a new Tile shows up a minute later
+        coord.devices[c.address] = c  # a new Tile shows up a minute later
         t2 = t1 + 60
         b.last_seen = c.last_seen = t2
         manager.async_update(nowstamp=t2)
         await asyncio.gather(*coord.hass.tasks)
-        assert asked == [b.address]                     # not asked: the sweep ran a minute ago
+        assert asked == [b.address]  # not asked: the sweep ran a minute ago
         t3 = t1 + bermuda_tile.TILE_ORPHAN_SWEEP_SECS + 1
         b.last_seen = c.last_seen = t3
         manager.async_update(nowstamp=t3)
         await asyncio.gather(*coord.hass.tasks)
-        assert asked == [b.address, c.address]          # next pass: only the unanswered one
+        assert asked == [b.address, c.address]  # next pass: only the unanswered one
 
     asyncio.run(scenario())
 
@@ -814,7 +846,7 @@ def test_a_known_id_follows_a_natural_rotation_without_a_connection(monkeypatch)
         clock = {"t": 10_000.0}
         monkeypatch.setattr(bermuda_tile, "monotonic_time_coarse", lambda: clock["t"])
         now = clock["t"]
-        a, b, c = _house(now)                     # B continues A's RSSI pattern; C does not
+        a, b, c = _house(now)  # B continues A's RSSI pattern; C does not
         a.last_seen = now - 1
         coord = _Coord({a.address: a}, configured=[])
         manager = BermudaTileManager(coord)
@@ -832,15 +864,20 @@ def test_a_known_id_follows_a_natural_rotation_without_a_connection(monkeypatch)
         # Forty minutes later A goes quiet and B appears where A was: a natural rotation, long after the probe.
         later = now + 2400
         a.last_seen = later - 8
-        b.first_seen = later - 3; b.last_seen = later
-        c.first_seen = later - 3; c.last_seen = later
-        coord.devices[b.address] = b; coord.devices[c.address] = c
+        b.first_seen = later - 3
+        b.last_seen = later
+        c.first_seen = later - 3
+        c.last_seen = later
+        coord.devices[b.address] = b
+        coord.devices[c.address] = c
         clock["t"] = later
         manager.async_update(nowstamp=later)
         await asyncio.gather(*coord.hass.tasks)
-        assert asked == [a.address]                                 # no new connection
-        assert manager._probes[b.address]["uid"] == "cafe01" and manager._probes[b.address]["inherited_from"] == a.address
-        assert c.address not in manager._probes                     # a different pattern: not ours
+        assert asked == [a.address]  # no new connection
+        assert (
+            manager._probes[b.address]["uid"] == "cafe01" and manager._probes[b.address]["inherited_from"] == a.address
+        )
+        assert c.address not in manager._probes  # a different pattern: not ours
         ids = manager.identities()["cafe01"]
         assert ids["addresses"] == [a.address, b.address] and ids["heard_by"][0]["scanner"] == "s1"
 
@@ -879,10 +916,11 @@ def test_a_tile_lost_across_a_restart_is_adopted_by_its_remembered_pattern():
     coord2 = _Coord({b.address: b, c.address: c}, configured=[tile_id.upper()])
     coord2.options[CONF_TILE_PROBES] = False
     fresh = BermudaTileManager(coord2)
-    fresh.bindings = saved["bindings"]; fresh.patterns = saved["patterns"]
+    fresh.bindings = saved["bindings"]
+    fresh.patterns = saved["patterns"]
     t1 = now + 1000
     b.last_seen = c.last_seen = t1
-    fresh.async_update(nowstamp=t1)                     # just started: not declared gone yet
+    fresh.async_update(nowstamp=t1)  # just started: not declared gone yet
     assert fresh.bindings[tile_id][0] == a.address
     t2 = t1 + bermuda_tile.TILE_SILENT_SECS + 1
     b.last_seen = c.last_seen = t2
@@ -900,7 +938,7 @@ def test_bind_address_is_the_users_word():
     manager.bindings[tile_id] = [a.address]
     assert manager.bind_address(tile_id.upper(), c.address.upper()) == c.address
     assert manager.bindings[tile_id][0] == c.address and manager.last_handover["reason"] == "user"
-    assert abs(manager.patterns[tile_id]["s2"] + 60.33) < 0.1   # C reads -60/-61/-60 on s2
+    assert abs(manager.patterns[tile_id]["s2"] + 60.33) < 0.1  # C reads -60/-61/-60 on s2
     with pytest.raises(ValueError):
         manager.bind_address("tile_000000000000", c.address)
     with pytest.raises(ValueError):

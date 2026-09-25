@@ -36,7 +36,6 @@ import asyncio
 import contextlib
 import os
 from collections import deque
-
 from typing import TYPE_CHECKING, Any
 
 from bluetooth_data_tools import monotonic_time_coarse
@@ -44,10 +43,10 @@ from homeassistant.core import callback
 from homeassistant.helpers.storage import Store
 
 from .const import (
-    CONF_TILE_PROBES,
     _LOGGER,
     _LOGGER_SPAM_LESS,
     CONF_DEVICES,
+    CONF_TILE_PROBES,
     METADEVICE_TYPE_TILE_SOURCE,
     TILE_HANDOVER_WINDOW,
     TILE_METADEVICE_PREFIX,
@@ -119,18 +118,19 @@ TILE_PROBE_BUDGET = 20
 TILE_PROBE_BUDGET_SECS = 3600.0
 
 
-class TileProbeUnavailable(Exception):
+class TileProbeUnavailableError(Exception):
     """No connectable scanner currently hears the address."""
 
 
-class TileNoIdCharacteristic(Exception):
+class TileNoIdCharacteristicError(Exception):
     """Connected, but the Tile exposes no way to read a Tile ID; str() lists what it does expose."""
 
 
 async def _read_uid_over_mep(client, timeout: float = TILE_TDI_TIMEOUT) -> str:
-    """The connectionless TDI "read tile id" exchange on the MEP characteristics.
+    """
+    The connectionless TDI "read tile id" exchange on the MEP characteristics.
 
-    Raises TileNoIdCharacteristic when the Tile answers with a TDI error (it
+    Raises TileNoIdCharacteristicError when the Tile answers with a TDI error (it
     has no ID to give), asyncio.TimeoutError when it does not answer at all.
     """
     cid = os.urandom(4)
@@ -152,40 +152,51 @@ async def _read_uid_over_mep(client, timeout: float = TILE_TDI_TIMEOUT) -> str:
         with contextlib.suppress(Exception):
             await client.stop_notify(MEP_RSP_UUID)
     if not payload or payload[0] == TDI_ERROR:
-        raise TileNoIdCharacteristic(f"TDI error {payload[1] if len(payload) > 1 else '?'}: no Tile ID to read")
+        msg = f"TDI error {payload[1] if len(payload) > 1 else '?'}: no Tile ID to read"
+        raise TileNoIdCharacteristicError(msg)
     if payload[0] != TDI_READ_TILE_ID or len(payload) < 2:
-        raise TileNoIdCharacteristic(f"unexpected TDI answer {payload.hex()}")
+        msg = f"unexpected TDI answer {payload.hex()}"
+        raise TileNoIdCharacteristicError(msg)
     return payload[1:].hex()
 
 
 async def async_read_tile_uid(hass, address: str) -> str | None:
-    """Connect to a Tile through Home Assistant's bluetooth stack and read its Tile ID.
+    """
+    Connect to a Tile through Home Assistant's bluetooth stack and read its Tile ID.
 
     Returns the ID as hex, or None when the Tile has no Tile ID characteristic
-    (a non-rotating model). Raises TileProbeUnavailable when no connectable
+    (a non-rotating model). Raises TileProbeUnavailableError when no connectable
     path exists right now (no active proxy hears it), and whatever bleak
     raises when the connection or read fails.
     """
-    from homeassistant.components import bluetooth  # noqa: PLC0415
-    from bleak_retry_connector import BleakClientWithServiceCache, establish_connection  # noqa: PLC0415
+    from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
+    from homeassistant.components import bluetooth
 
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), connectable=True)
     if ble_device is None:
-        raise TileProbeUnavailable(f"no connectable scanner hears {address}")
+        msg = f"no connectable scanner hears {address}"
+        raise TileProbeUnavailableError(msg)
     client = await establish_connection(BleakClientWithServiceCache, ble_device, f"Tile {address}", max_attempts=2)
     try:
         char = client.services.get_characteristic(TILE_ID_CHAR_UUID)
         if char is not None:
             return bytes(await client.read_gatt_char(char)).hex()
-        if client.services.get_characteristic(MEP_CMD_UUID) is not None and client.services.get_characteristic(MEP_RSP_UUID) is not None:
+        if (
+            client.services.get_characteristic(MEP_CMD_UUID) is not None
+            and client.services.get_characteristic(MEP_RSP_UUID) is not None
+        ):
             return await _read_uid_over_mep(client)
         # What the Tile does expose, so a model that keeps its ID somewhere
         # else can be recognised from the diagnostics.
         seen = []
         for service in client.services:
-            chars = ",".join(c.uuid[4:8] if c.uuid.endswith("-0000-1000-8000-00805f9b34fb") else c.uuid for c in service.characteristics)
-            seen.append(f"{service.uuid[4:8] if service.uuid.endswith('-0000-1000-8000-00805f9b34fb') else service.uuid}[{chars}]")
-        raise TileNoIdCharacteristic(" ".join(seen) or "no services")
+            chars = ",".join(
+                c.uuid[4:8] if c.uuid.endswith("-0000-1000-8000-00805f9b34fb") else c.uuid
+                for c in service.characteristics
+            )
+            short = service.uuid[4:8] if service.uuid.endswith("-0000-1000-8000-00805f9b34fb") else service.uuid
+            seen.append(f"{short}[{chars}]")
+        raise TileNoIdCharacteristicError(" ".join(seen) or "no services")
     finally:
         await client.disconnect()
 
@@ -197,7 +208,7 @@ def tile_metadevice_id(address: str) -> str:
 
 def mac_from_tile_id(tile_id: str) -> str | None:
     """The address a ``tile_<12 hex>`` id was made from, or None if malformed."""
-    tail = tile_id[len(TILE_METADEVICE_PREFIX):].lower()
+    tail = tile_id[len(TILE_METADEVICE_PREFIX) :].lower()
     if len(tail) != 12 or any(c not in "0123456789abcdef" for c in tail):
         return None
     return ":".join(tail[i : i + 2] for i in range(0, 12, 2))
@@ -209,10 +220,12 @@ def _mean(values) -> float | None:
 
 
 def _rssi_by_scanner(device: BermudaDevice, *, latest: bool) -> dict[str, float]:
-    """Per-scanner signal for a device: its newest few readings (``latest``,
+    """
+    Per-scanner signal for a device: its newest few readings (``latest``,
     for the departing address) or its oldest kept ones (for a candidate, so a
     tag that has since been carried away still matches where it first
-    appeared)."""
+    appeared).
+    """
     out: dict[str, float] = {}
     for advert in (getattr(device, "adverts", None) or {}).values():
         hist = list(getattr(advert, "hist_rssi", None) or [])
@@ -226,7 +239,8 @@ def _rssi_by_scanner(device: BermudaDevice, *, latest: bool) -> dict[str, float]
 
 
 def handover_score(departing: BermudaDevice, candidate: BermudaDevice) -> tuple[float, int] | None:
-    """Mean absolute per-scanner RSSI delta between a departing address's last
+    """
+    Mean absolute per-scanner RSSI delta between a departing address's last
     readings and a candidate's first, over the scanners that saw both.
 
     None when fewer than TILE_MIN_SCANNERS scanners saw both: one scanner's
@@ -301,8 +315,9 @@ class BermudaTileManager:
         patterns = data.get("patterns")
         if isinstance(patterns, dict):
             self.patterns = {
-                str(tile_id): {str(k).lower(): float(v) for k, v in pattern.items() if isinstance(v, (int, float))}
-                for tile_id, pattern in patterns.items() if isinstance(pattern, dict)
+                str(tile_id): {str(k).lower(): float(v) for k, v in pattern.items() if isinstance(v, int | float)}
+                for tile_id, pattern in patterns.items()
+                if isinstance(pattern, dict)
             }
 
     def _data(self) -> dict[str, Any]:
@@ -350,7 +365,9 @@ class BermudaTileManager:
         if other is not None:
             _LOGGER.warning(
                 "Tile %s read Tile ID %s, which is %s's: its bound address belongs to that Tile, not learning it",
-                tile_id, uid, other,
+                tile_id,
+                uid,
+                other,
             )
             self.bindings.pop(tile_id, None)
             self._schedule_save()
@@ -362,7 +379,8 @@ class BermudaTileManager:
 
     @callback
     def async_update(self, nowstamp: float | None = None) -> None:
-        """Run once per update cycle, before update_metadevices copies adverts.
+        """
+        Run once per update cycle, before update_metadevices copies adverts.
 
         Ensures a metadevice exists for every configured Tile (seeded from the
         address in its id), keeps ``metadevice_sources`` in step with the
@@ -375,7 +393,7 @@ class BermudaTileManager:
             self._expire_probes(nowstamp)
         if self._started is None:
             self._started = nowstamp
-        self._follow_rotations(nowstamp)   # every known ID, configured or not
+        self._follow_rotations(nowstamp)  # every known ID, configured or not
         configured = {str(a).lower() for a in coordinator.options.get(CONF_DEVICES, [])}
         dirty = False
         # A Tile the user stopped tracking must not keep a binding: it would go
@@ -395,7 +413,7 @@ class BermudaTileManager:
                 self._schedule_save()
             return
         for tile_id in sorted(tile_ids):
-            metadevice = coordinator._get_or_create_device(tile_id)
+            metadevice = coordinator._get_or_create_device(tile_id)  # noqa: SLF001
             if metadevice.address not in coordinator.metadevices:
                 coordinator.metadevices[metadevice.address] = metadevice
             if tile_id in configured:
@@ -421,7 +439,7 @@ class BermudaTileManager:
             for address in reversed(sources):
                 if address not in metadevice.metadevice_sources:
                     metadevice.metadevice_sources.insert(0, address)
-                source = coordinator._get_device(address)
+                source = coordinator._get_device(address)  # noqa: SLF001
                 if source is not None:
                     source.metadevice_type.add(METADEVICE_TYPE_TILE_SOURCE)
                     source.is_tile = True
@@ -438,7 +456,8 @@ class BermudaTileManager:
             self._schedule_save()
 
     def _follow_rotations(self, nowstamp: float) -> None:
-        """Keep every known Tile ID attached to the address its Tile rotated to.
+        """
+        Keep every known Tile ID attached to the address its Tile rotated to.
 
         Not only the configured Tiles: a Tile whose ID was read once is
         recognised again after a natural rotation by the same RSSI-pattern
@@ -464,7 +483,7 @@ class BermudaTileManager:
 
     def _remember_pattern(self, tile_id: str, sources: list[str], nowstamp: float) -> bool:
         """Keep the bound address's latest per-scanner RSSI while it is heard; True when worth saving."""
-        bound = self._coordinator._get_device(sources[0]) if sources else None
+        bound = self._coordinator._get_device(sources[0]) if sources else None  # noqa: SLF001
         if bound is None or not bound.last_seen or nowstamp - bound.last_seen > TILE_SILENT_SECS:
             return False
         pattern = _rssi_by_scanner(bound, latest=True)
@@ -479,13 +498,18 @@ class BermudaTileManager:
     def _live_unbound_tiles(self, nowstamp: float) -> list[BermudaDevice]:
         taken = self.bound_sources()
         return [
-            d for d in self._coordinator.devices.values()
-            if getattr(d, "is_tile", False) and d.address not in taken and not d.metadevice_sources
-            and d.last_seen and nowstamp - d.last_seen <= TILE_SILENT_SECS
+            d
+            for d in self._coordinator.devices.values()
+            if getattr(d, "is_tile", False)
+            and d.address not in taken
+            and not d.metadevice_sources
+            and d.last_seen
+            and nowstamp - d.last_seen <= TILE_SILENT_SECS
         ]
 
     def _adopt_by_pattern(self, tile_id: str, nowstamp: float) -> bool:
-        """Bind the live Tile address whose readings match where this Tile last was.
+        """
+        Bind the live Tile address whose readings match where this Tile last was.
 
         The persisted pattern stands in for the departed address the handover
         heuristic normally compares against, so a Tile that rotated while
@@ -511,15 +535,22 @@ class BermudaTileManager:
             return False
         if len(scored) > 1 and scored[1][0] - best_score < TILE_RSSI_MARGIN:
             self.ambiguous_handovers += 1
-            self.last_ambiguity = {"tile": tile_id, "best": best.address, "score": best_score,
-                                   "runner_up": scored[1][2].address, "runner_up_score": scored[1][0],
-                                   "reason": "recovery", "stamp": monotonic_time_coarse()}
+            self.last_ambiguity = {
+                "tile": tile_id,
+                "best": best.address,
+                "score": best_score,
+                "runner_up": scored[1][2].address,
+                "runner_up_score": scored[1][0],
+                "reason": "recovery",
+                "stamp": monotonic_time_coarse(),
+            }
             return False
         self.bind(tile_id, best.address, score=best_score, scanners=best_n, reason="rssi pattern (recovered)")
         return True
 
     def bind_address(self, tile_id: str, address: str) -> str:
-        """The user says: configured Tile ``tile_id`` is the tag at ``address`` right now.
+        """
+        The user says: configured Tile ``tile_id`` is the tag at ``address`` right now.
 
         Binds it and remembers its readings as the Tile's pattern. Raises
         ValueError for an unknown Tile or an address Bermuda does not know.
@@ -527,10 +558,12 @@ class BermudaTileManager:
         tile_id, address = tile_id.lower(), address.lower()
         configured = {str(a).lower() for a in self._coordinator.options.get(CONF_DEVICES, [])}
         if tile_id not in configured and tile_id not in self.bindings:
-            raise ValueError(f"{tile_id} is not a configured Tile")
-        device = self._coordinator._get_device(address)
+            msg = f"{tile_id} is not a configured Tile"
+            raise ValueError(msg)
+        device = self._coordinator._get_device(address)  # noqa: SLF001
         if device is None:
-            raise ValueError(f"Bermuda has not heard {address}")
+            msg = f"Bermuda has not heard {address}"
+            raise ValueError(msg)
         self.bind(tile_id, address, reason="user")
         pattern = _rssi_by_scanner(device, latest=True)
         if pattern:
@@ -539,7 +572,8 @@ class BermudaTileManager:
         return address
 
     def _orphan_handover(self, tile_id: str, nowstamp: float) -> bool:
-        """Recover a Tile whose bound address is long gone.
+        """
+        Recover a Tile whose bound address is long gone.
 
         There is no handover window to reason about any more, and with several
         Tiles in the house an RSSI guess would be a coin toss, so only identity
@@ -558,8 +592,11 @@ class BermudaTileManager:
         # An answer already in hand (read, inherited, or declared by the user) settles it without a sweep.
         if uid:
             for address, result in self._probes.items():
-                if result.get("uid") == uid and address not in taken \
-                        and self._probe_possible(self._coordinator._get_device(address), nowstamp):
+                if (
+                    result.get("uid") == uid
+                    and address not in taken
+                    and self._probe_possible(self._coordinator._get_device(address), nowstamp)  # noqa: SLF001
+                ):
                     self.bind(tile_id, address, reason="tile id (recovered)")
                     return True
         last = self._orphan_sweep_at.get(tile_id)
@@ -582,7 +619,8 @@ class BermudaTileManager:
         return self._adopt_by_pattern(tile_id, nowstamp)
 
     def identities(self) -> dict[str, dict[str, Any]]:
-        """Every Tile ID read so far and where that Tile is now.
+        """
+        Every Tile ID read so far and where that Tile is now.
 
         ``{uid: {"uid", "addresses", "last_seen_age", "area_name", "strongest",
         "tile_id"}}`` - addresses that answered (or inherited) this ID, the
@@ -596,12 +634,20 @@ class BermudaTileManager:
             uid = result.get("uid")
             if not uid:
                 continue
-            entry = out.setdefault(uid, {
-                "uid": uid, "addresses": [], "last_seen_age": None, "area_name": None, "strongest": None,
-                "heard_by": [], "tile_id": uid_to_tile.get(uid),
-            })
+            entry = out.setdefault(
+                uid,
+                {
+                    "uid": uid,
+                    "addresses": [],
+                    "last_seen_age": None,
+                    "area_name": None,
+                    "strongest": None,
+                    "heard_by": [],
+                    "tile_id": uid_to_tile.get(uid),
+                },
+            )
             entry["addresses"].append(address)
-            device = self._coordinator._get_device(address)
+            device = self._coordinator._get_device(address)  # noqa: SLF001
             last_seen = getattr(device, "last_seen", None) if device is not None else None
             if not last_seen:
                 continue
@@ -616,11 +662,13 @@ class BermudaTileManager:
                 stamp = getattr(advert, "stamp", None)
                 if rssi is None or (stamp is not None and now - stamp > 120):
                     continue
-                heard.append({
-                    "address": getattr(advert, "scanner_address", None),
-                    "scanner": getattr(advert, "name", None) or getattr(advert, "scanner_address", None),
-                    "rssi": rssi,
-                })
+                heard.append(
+                    {
+                        "address": getattr(advert, "scanner_address", None),
+                        "scanner": getattr(advert, "name", None) or getattr(advert, "scanner_address", None),
+                        "rssi": rssi,
+                    }
+                )
             heard.sort(key=lambda h: -h["rssi"])
             # Every scanner that heard the freshest address, loudest first, so
             # a consumer can pick the loudest of its OWN placed proxies.
@@ -629,7 +677,8 @@ class BermudaTileManager:
         return out
 
     def bind_by_uid(self, tile_id: str, uid: str) -> str | None:
-        """Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``.
+        """
+        Declare that configured Tile ``tile_id`` is the tag with Tile ID ``uid``.
 
         The user is the one who knows which of the IDs in the house is the
         Tile on the kitchen keys. The ID is remembered, so every later
@@ -641,17 +690,19 @@ class BermudaTileManager:
         tile_id, uid = tile_id.lower(), uid.lower()
         configured = {str(a).lower() for a in self._coordinator.options.get(CONF_DEVICES, [])}
         if tile_id not in configured and tile_id not in self.bindings:
-            raise ValueError(f"{tile_id} is not a configured Tile")
+            msg = f"{tile_id} is not a configured Tile"
+            raise ValueError(msg)
         for other, known in self.uids.items():
             if known == uid and other != tile_id:
-                raise ValueError(f"Tile ID {uid} is already declared as {other}")
+                msg = f"Tile ID {uid} is already declared as {other}"
+                raise ValueError(msg)
         self.uids[tile_id] = uid
         self.bindings.setdefault(tile_id, [])
         best = None
         for address, result in self._probes.items():
             if result.get("uid") != uid:
                 continue
-            device = self._coordinator._get_device(address)
+            device = self._coordinator._get_device(address)  # noqa: SLF001
             last_seen = getattr(device, "last_seen", None) if device is not None else None
             if last_seen and (best is None or last_seen > best[0]):
                 best = (last_seen, address)
@@ -662,10 +713,10 @@ class BermudaTileManager:
         self.bind(tile_id, best[1], reason="tile id (user)")
         return best[1]
 
-    def _maybe_handover(self, metadevice: BermudaDevice, tile_id: str, nowstamp: float) -> bool:
+    def _maybe_handover(self, metadevice: BermudaDevice, tile_id: str, nowstamp: float) -> bool:  # noqa: PLR0911
         coordinator = self._coordinator
         sources = self.bindings.get(tile_id) or []
-        bound = coordinator._get_device(sources[0]) if sources else None
+        bound = coordinator._get_device(sources[0]) if sources else None  # noqa: SLF001
         if not sources:
             return False
         if bound is None or not bound.last_seen or nowstamp - bound.last_seen > TILE_ORPHAN_SECS:
@@ -784,7 +835,8 @@ class BermudaTileManager:
         return nowstamp - device.last_seen <= TILE_PROBE_MAX_AGE_SECS
 
     def _inherit_answer(self, address: str, nowstamp: float | None = None) -> dict[str, Any] | None:
-        """The answer of an address this one continues, if any.
+        """
+        The answer of an address this one continues, if any.
 
         ``address`` inherits when it first appeared either within
         TILE_POST_PROBE_WINDOW of a definitive probe answer (a Tile changes
@@ -794,7 +846,7 @@ class BermudaTileManager:
         (the same test the handover heuristic uses). Records and returns the
         inherited answer, or None.
         """
-        device = self._coordinator._get_device(address)
+        device = self._coordinator._get_device(address)  # noqa: SLF001
         if device is None or not device.first_seen:
             return None
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
@@ -808,7 +860,7 @@ class BermudaTileManager:
             # rotating within the window must not both continue the same one.
             if any(r.get("inherited_from") == probed for a, r in self._probes.items() if a != address):
                 continue
-            departed = self._coordinator._get_device(probed)
+            departed = self._coordinator._get_device(probed)  # noqa: SLF001
             if departed is None:
                 continue
             done = result["stamp"]
@@ -816,7 +868,7 @@ class BermudaTileManager:
             quiet = getattr(departed, "last_seen", None)
             rotated = (
                 quiet is not None
-                and nowstamp - quiet >= 5.0                                   # the old address really stopped
+                and nowstamp - quiet >= 5.0  # the old address really stopped
                 and quiet - TILE_SILENT_SECS <= device.first_seen <= quiet + TILE_HANDOVER_WINDOW
             )
             if not (after_probe or rotated):
@@ -844,15 +896,17 @@ class BermudaTileManager:
         uid = self.uids.get(tile_id)
         return not uid or result["uid"] == uid
 
-    def _request_probe(self, address: str, learn_for: str | None = None, nowstamp: float | None = None) -> None:
-        """Queue a Tile ID read for ``address`` unless one is pending, already
-        answered, or the address is no longer heard (nothing to connect to)."""
+    def _request_probe(self, address: str, learn_for: str | None = None, nowstamp: float | None = None) -> None:  # noqa: PLR0911
+        """
+        Queue a Tile ID read for ``address`` unless one is pending, already
+        answered, or the address is no longer heard (nothing to connect to).
+        """
         if not self._can_probe():
             return
         address = address.lower()
         if address in self._pending or any(a == address for a, _ in self._queue):
             return
-        if not self._probe_possible(self._coordinator._get_device(address), nowstamp):
+        if not self._probe_possible(self._coordinator._get_device(address), nowstamp):  # noqa: SLF001
             return
         result = self._probes.get(address)
         if result is not None:
@@ -872,7 +926,9 @@ class BermudaTileManager:
             if not getattr(self, "_budget_warned", False):
                 self._budget_warned = True
                 _LOGGER.warning(
-                    "Tile probes paused: %d connections in the last hour (budget %d)", len(self._connections), TILE_PROBE_BUDGET
+                    "Tile probes paused: %d connections in the last hour (budget %d)",
+                    len(self._connections),
+                    TILE_PROBE_BUDGET,
                 )
             return
         self._budget_warned = False
@@ -888,9 +944,9 @@ class BermudaTileManager:
             address, learn_for = self._queue.pop(0)
             try:
                 uid = await asyncio.wait_for(self._probe_fn(self._hass, address), TILE_PROBE_TIMEOUT)
-            except TileProbeUnavailable as err:
+            except TileProbeUnavailableError as err:
                 self._record_probe(address, None, "unavailable", str(err))
-            except TileNoIdCharacteristic as err:
+            except TileNoIdCharacteristicError as err:
                 self._record_probe(address, None, None, str(err))
                 self._on_probe_result(address, None, learn_for)
             except Exception as err:  # noqa: BLE001 - bleak raises a zoo of exceptions
@@ -933,7 +989,8 @@ class BermudaTileManager:
                 learned = True
             if learned:
                 _LOGGER.info(
-                    "Tile %s %s", learn_for,
+                    "Tile %s %s",
+                    learn_for,
                     f"identified: Tile ID {uid}" if uid else "has no Tile ID characteristic (it will not rotate)",
                 )
             self._schedule_save()
@@ -944,9 +1001,17 @@ class BermudaTileManager:
             if known == uid and (self.bindings.get(tile_id) or [None])[0] != address:
                 self.bind(tile_id, address, reason="tile id")
 
-    def bind(self, tile_id: str, address: str, *, score: float | None = None, scanners: int | None = None,
-             reason: str | None = None) -> None:
-        """Make ``address`` the current source of Tile ``tile_id``.
+    def bind(
+        self,
+        tile_id: str,
+        address: str,
+        *,
+        score: float | None = None,
+        scanners: int | None = None,
+        reason: str | None = None,
+    ) -> None:
+        """
+        Make ``address`` the current source of Tile ``tile_id``.
 
         Public on purpose: a future integration that knows a tag's address for
         certain can call this directly instead of going through the heuristic.
@@ -958,18 +1023,24 @@ class BermudaTileManager:
             sources.remove(address)
         sources.insert(0, address)
         del sources[TILE_SOURCE_HISTORY:]
-        metadevice = coordinator._get_or_create_device(tile_id)
+        metadevice = coordinator._get_or_create_device(tile_id)  # noqa: SLF001
         if metadevice.address not in coordinator.metadevices:
             coordinator.metadevices[metadevice.address] = metadevice
         if address in metadevice.metadevice_sources:
             metadevice.metadevice_sources.remove(address)
         metadevice.metadevice_sources.insert(0, address)
-        source = coordinator._get_or_create_device(address)
+        source = coordinator._get_or_create_device(address)  # noqa: SLF001
         source.metadevice_type.add(METADEVICE_TYPE_TILE_SOURCE)
         source.is_tile = True
         self.handovers += 1
-        self.last_handover = {"tile": tile_id, "to": address, "score": score, "scanners": scanners,
-                              "reason": reason, "stamp": monotonic_time_coarse()}
+        self.last_handover = {
+            "tile": tile_id,
+            "to": address,
+            "score": score,
+            "scanners": scanners,
+            "reason": reason,
+            "stamp": monotonic_time_coarse(),
+        }
         _LOGGER.info(
             "Tile %s re-bound to %s%s%s",
             metadevice.name,
@@ -992,14 +1063,18 @@ class BermudaTileManager:
             "probes": self.probes,
             "probe_failures": self.probe_failures,
             "probes_inherited": self.probes_inherited,
-            "probe_budget_left": max(0, TILE_PROBE_BUDGET - sum(
-                1 for c in self._connections if monotonic_time_coarse() - c <= TILE_PROBE_BUDGET_SECS
-            )),
+            "probe_budget_left": max(
+                0,
+                TILE_PROBE_BUDGET
+                - sum(1 for c in self._connections if monotonic_time_coarse() - c <= TILE_PROBE_BUDGET_SECS),
+            ),
             "probes_pending": sorted(self._pending),
             "last_probe": self.last_probe,
             "probe_results": {
                 a: {
-                    "uid": r.get("uid"), "error": r.get("error"), "age": round(monotonic_time_coarse() - r["stamp"], 1),
+                    "uid": r.get("uid"),
+                    "error": r.get("error"),
+                    "age": round(monotonic_time_coarse() - r["stamp"], 1),
                     **({"inherited_from": r["inherited_from"]} if r.get("inherited_from") else {}),
                 }
                 for a, r in self._probes.items()
@@ -1007,7 +1082,8 @@ class BermudaTileManager:
             "patterns": {tile_id: len(p) for tile_id, p in self.patterns.items()},
             "bound_age": {
                 tile_id: (
-                    None if not sources or (d := self._coordinator._get_device(sources[0])) is None or not d.last_seen
+                    None
+                    if not sources or (d := self._coordinator._get_device(sources[0])) is None or not d.last_seen  # noqa: SLF001
                     else round(monotonic_time_coarse() - d.last_seen, 1)
                 )
                 for tile_id, sources in self.bindings.items()
@@ -1016,7 +1092,8 @@ class BermudaTileManager:
 
 
 def tile_capture(coordinator: BermudaDataUpdateCoordinator) -> list[dict[str, Any]]:
-    """Phase-0 capture: everything Bermuda has seen from Tile adverts.
+    """
+    Phase-0 capture: everything Bermuda has seen from Tile adverts.
 
     Meant to be read from a diagnostics download by whoever designs the next
     step: per address, the address class (top two bits of octet 0), when it
@@ -1027,9 +1104,7 @@ def tile_capture(coordinator: BermudaDataUpdateCoordinator) -> list[dict[str, An
     """
     nowstamp = monotonic_time_coarse()
     bound_to = {
-        address: tile_id
-        for tile_id, sources in coordinator.tile_manager.bindings.items()
-        for address in sources
+        address: tile_id for tile_id, sources in coordinator.tile_manager.bindings.items() for address in sources
     }
     out = []
     for device in coordinator.devices.values():
@@ -1055,16 +1130,18 @@ def tile_capture(coordinator: BermudaDataUpdateCoordinator) -> list[dict[str, An
                 "local_name": advert.local_name[0][0] if advert.local_name else None,
                 "service_uuids": list(advert.service_uuids),
             }
-        out.append({
-            "address": device.address,
-            "address_type": device.address_type,
-            "top_bits": f"0b{top_bits:02b}" if top_bits is not None else None,
-            "first_seen_age": round(nowstamp - device.first_seen, 1) if device.first_seen else None,
-            "last_seen_age": round(nowstamp - device.last_seen, 1) if device.last_seen else None,
-            "name": device.name,
-            "ref_power": device.ref_power,
-            "bound_to": bound_to.get(device.address),
-            "scanners": scanners,
-        })
+        out.append(
+            {
+                "address": device.address,
+                "address_type": device.address_type,
+                "top_bits": f"0b{top_bits:02b}" if top_bits is not None else None,
+                "first_seen_age": round(nowstamp - device.first_seen, 1) if device.first_seen else None,
+                "last_seen_age": round(nowstamp - device.last_seen, 1) if device.last_seen else None,
+                "name": device.name,
+                "ref_power": device.ref_power,
+                "bound_to": bound_to.get(device.address),
+                "scanners": scanners,
+            }
+        )
     out.sort(key=lambda row: row["last_seen_age"] if row["last_seen_age"] is not None else 1e12)
     return out

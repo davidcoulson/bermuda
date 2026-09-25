@@ -235,7 +235,8 @@ class BermudaIrkManager:
         return _unsubscribe
 
     def async_diagnostics_no_redactions(self):
-        """Return diagnostic info. Make sure to run redactions over the results.
+        """
+        Return diagnostic info. Make sure to run redactions over the results.
 
         IRKs are secrets: whoever holds one can resolve that phone's rotating
         addresses for as long as the key lives, so like the FindMy private

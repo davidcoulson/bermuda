@@ -320,9 +320,10 @@ def test_tracked_devices_is_a_cheap_membership_view():
         "unique_id": "aa:bb:cc:dd:ee:ff",
     }
     assert "last_seen_age" in tracked["aa:bb:cc:dd:ee:ff"]
-    assert async_get_tracked_devices(
-        SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
-    ) is None
+    assert (
+        async_get_tracked_devices(SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: [])))
+        is None
+    )
 
 
 def test_scanners_expose_liveness_without_an_advert_walk(monkeypatch):
@@ -375,7 +376,7 @@ def test_history_and_path_loss_parameters_ride_along():
     advert = next(iter(coordinator.devices["aa:bb:cc:dd:ee:ff"].adverts.values()))
     advert.hist_rssi = [-63, -65, -70, -61]
     advert.hist_stamp = [999.0, 998.0, 996.5, 995.0]
-    advert.ref_power = 0          # "use the global option"
+    advert.ref_power = 0  # "use the global option"
     advert.conf_ref_power = -55.0
     advert.conf_attenuation = 3.0
     advert.conf_rssi_offset = 2
@@ -429,12 +430,16 @@ def _offset_fixture():
     }
     coordinator = SimpleNamespace(
         options={"rssi_offsets": {"aa:aa:aa:aa:aa:02": 2.0}, "attenuation": 3.0, "ref_power": -55.0},
-        devices={"dev1": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev1"}),
-                 "dev2": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev2"})},
+        devices={
+            "dev1": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev1"}),
+            "dev2": SimpleNamespace(adverts={k: v for k, v in adverts.items() if k[0] == "dev2"}),
+        },
         inline_options=None,
     )
-    coordinator.async_apply_rssi_offsets = lambda offsets, merge=True: BermudaDataUpdateCoordinator.async_apply_rssi_offsets(
-        coordinator, offsets, merge=merge
+    coordinator.async_apply_rssi_offsets = (
+        lambda offsets, merge=True: BermudaDataUpdateCoordinator.async_apply_rssi_offsets(
+            coordinator, offsets, merge=merge
+        )
     )
     entry = SimpleNamespace(
         entry_id="e1",
@@ -482,7 +487,11 @@ def test_set_rssi_offsets_applies_live_and_persists_without_reload():
     # Every advert from the changed scanner got the offset and a recompute;
     # the one with no rssi yet got the offset but no recompute; the other
     # scanner's advert is untouched.
-    a1, a2, a3 = adverts[("dev1", "aa:aa:aa:aa:aa:01")], adverts[("dev1", "aa:aa:aa:aa:aa:02")], adverts[("dev2", "aa:aa:aa:aa:aa:01")]
+    a1, a2, a3 = (
+        adverts[("dev1", "aa:aa:aa:aa:aa:01")],
+        adverts[("dev1", "aa:aa:aa:aa:aa:02")],
+        adverts[("dev2", "aa:aa:aa:aa:aa:01")],
+    )
     assert (a1.conf_rssi_offset, a1.recomputed) == (-4.4, 1)
     assert (a2.conf_rssi_offset, a2.recomputed) == (0, 0)
     assert (a3.conf_rssi_offset, a3.recomputed) == (-4.4, 0)
@@ -513,27 +522,35 @@ def test_set_rssi_offsets_replace_mode_and_no_op_persist():
     assert len(updates) == n
     # Clamped to Bermuda's own +-127 dB range; None when Bermuda is absent.
     assert async_set_rssi_offsets(hass, {"aa:aa:aa:aa:aa:01": 500})["aa:aa:aa:aa:aa:01"] == 127.0
-    assert async_set_rssi_offsets(
-        SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda d: [])), {"x": 1}
-    ) is None
+    assert (
+        async_set_rssi_offsets(SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda d: [])), {"x": 1})
+        is None
+    )
 
 
 def test_scanner_ranging_lists_how_scanners_hear_each_other(monkeypatch):
     import custom_components.bermuda.api as api_module
+
     monkeypatch.setattr(api_module, "monotonic_time_coarse", lambda: 1000.0)
     """Each scanner's own advert, as heard by its siblings: a labelled range
     at a known position, without a full snapshot or a dump_devices call."""
-    heard_by_b = SimpleNamespace(scanner_address="bb:00:00:00:00:02", rssi_distance=4.0,
-                                 rssi_distance_raw=4.4, rssi=-70, stamp=990.0)
-    heard_by_self = SimpleNamespace(scanner_address="aa:00:00:00:00:01", rssi_distance=0.1,
-                                    rssi_distance_raw=0.1, rssi=-30, stamp=999.0)
-    stale = SimpleNamespace(scanner_address="cc:00:00:00:00:03", rssi_distance=9.0,
-                            rssi_distance_raw=9.5, rssi=-88, stamp=100.0)
-    scanner_a = SimpleNamespace(address="aa:00:00:00:00:01", adverts={
-        ("aa:00:00:00:00:01", "bb:00:00:00:00:02"): heard_by_b,
-        ("aa:00:00:00:00:01", "aa:00:00:00:00:01"): heard_by_self,
-        ("aa:00:00:00:00:01", "cc:00:00:00:00:03"): stale,
-    })
+    heard_by_b = SimpleNamespace(
+        scanner_address="bb:00:00:00:00:02", rssi_distance=4.0, rssi_distance_raw=4.4, rssi=-70, stamp=990.0
+    )
+    heard_by_self = SimpleNamespace(
+        scanner_address="aa:00:00:00:00:01", rssi_distance=0.1, rssi_distance_raw=0.1, rssi=-30, stamp=999.0
+    )
+    stale = SimpleNamespace(
+        scanner_address="cc:00:00:00:00:03", rssi_distance=9.0, rssi_distance_raw=9.5, rssi=-88, stamp=100.0
+    )
+    scanner_a = SimpleNamespace(
+        address="aa:00:00:00:00:01",
+        adverts={
+            ("aa:00:00:00:00:01", "bb:00:00:00:00:02"): heard_by_b,
+            ("aa:00:00:00:00:01", "aa:00:00:00:00:01"): heard_by_self,
+            ("aa:00:00:00:00:01", "cc:00:00:00:00:03"): stale,
+        },
+    )
     scanner_b = SimpleNamespace(address="bb:00:00:00:00:02", adverts={})
     coordinator = SimpleNamespace(devices={}, get_scanners=[scanner_a, scanner_b])
     hass = _make_hass(coordinator)
@@ -541,11 +558,11 @@ def test_scanner_ranging_lists_how_scanners_hear_each_other(monkeypatch):
     ranging = async_get_scanner_ranging(hass)
     assert ranging["version"] == SNAPSHOT_VERSION
     a = ranging["scanners"]["aa:00:00:00:00:01"]
-    assert set(a) == {"bb:00:00:00:00:02", "cc:00:00:00:00:03"}   # never itself
+    assert set(a) == {"bb:00:00:00:00:02", "cc:00:00:00:00:03"}  # never itself
     assert a["bb:00:00:00:00:02"]["distance"] == 4.0
     assert a["bb:00:00:00:00:02"]["distance_raw"] == 4.4
     assert a["bb:00:00:00:00:02"]["age"] is not None
-    assert ranging["scanners"]["bb:00:00:00:00:02"] == {}          # heard by nobody, still listed
+    assert ranging["scanners"]["bb:00:00:00:00:02"] == {}  # heard by nobody, still listed
 
     fresh = async_get_scanner_ranging(hass, max_age=500.0)
     assert set(fresh["scanners"]["aa:00:00:00:00:01"]) == {"bb:00:00:00:00:02"}
@@ -553,6 +570,7 @@ def test_scanner_ranging_lists_how_scanners_hear_each_other(monkeypatch):
 
 def test_scanner_ranging_is_none_without_bermuda_and_advertised_as_a_feature():
     from custom_components.bermuda.api import SNAPSHOT_FEATURES
+
     hass = SimpleNamespace(config_entries=SimpleNamespace(async_entries=lambda domain: []))
     assert async_get_scanner_ranging(hass) is None
     assert "scanner_ranging" in SNAPSHOT_FEATURES
@@ -564,8 +582,11 @@ def test_scanner_ranging_is_none_without_bermuda_and_advertised_as_a_feature():
 def _mgmt_hass(configured=("AA:AA:AA:AA:AA:01",), devices=None):
     from custom_components.bermuda.const import CONF_DEVICES
 
-    entry = SimpleNamespace(options={CONF_DEVICES: list(configured)}, data={},
-                            runtime_data=SimpleNamespace(coordinator=SimpleNamespace(devices=devices or {})))
+    entry = SimpleNamespace(
+        options={CONF_DEVICES: list(configured)},
+        data={},
+        runtime_data=SimpleNamespace(coordinator=SimpleNamespace(devices=devices or {})),
+    )
     updates = []
 
     def async_update_entry(e, options=None, data=None):
@@ -590,7 +611,7 @@ def test_set_tracked_devices_adds_removes_and_persists():
 
     hass, entry, updates = _mgmt_hass()
     new = asyncio.run(async_set_tracked_devices(hass, add=["tile_24d1093b0211", "AA:AA:AA:AA:AA:01"], remove=[]))
-    assert new == ["AA:AA:AA:AA:AA:01", "TILE_24D1093B0211"]          # upper-cased, de-duplicated
+    assert new == ["AA:AA:AA:AA:AA:01", "TILE_24D1093B0211"]  # upper-cased, de-duplicated
     assert entry.options["configured_devices"] == new and len(updates) == 1
     new = asyncio.run(async_set_tracked_devices(hass, remove=["aa:aa:aa:aa:aa:01"]))
     assert new == ["TILE_24D1093B0211"] and len(updates) == 2
@@ -608,9 +629,18 @@ def test_device_candidates_mirror_the_flows_picker(monkeypatch):
     adv = SimpleNamespace(stamp=9_990.0, rssi=-66)
 
     def dev(address, **kw):
-        base = dict(name=address, is_scanner=False, create_sensor=False, address_type="bd_addr_other",
-                    last_seen=9_995.0, first_seen=9_000.0, adverts={"x": adv}, is_tile=False, manufacturer=None,
-                    area_name=None)
+        base = dict(
+            name=address,
+            is_scanner=False,
+            create_sensor=False,
+            address_type="bd_addr_other",
+            last_seen=9_995.0,
+            first_seen=9_000.0,
+            adverts={"x": adv},
+            is_tile=False,
+            manufacturer=None,
+            area_name=None,
+        )
         base.update(kw)
         return SimpleNamespace(address=address, **base)
 
@@ -619,9 +649,9 @@ def test_device_candidates_mirror_the_flows_picker(monkeypatch):
         "aa:00:00:00:00:02": dev("aa:00:00:00:00:02", is_scanner=True),
         "aa:00:00:00:00:03": dev("aa:00:00:00:00:03", create_sensor=True),
         "aa:00:00:00:00:04": dev("aa:00:00:00:00:04", address_type=ADDR_TYPE_PRIVATE_BLE_DEVICE),
-        "aa:00:00:00:00:05": dev("aa:00:00:00:00:05", last_seen=1.0),                   # too old
+        "aa:00:00:00:00:05": dev("aa:00:00:00:00:05", last_seen=1.0),  # too old
         "24:d1:09:3b:02:11": dev("24:d1:09:3b:02:11", is_tile=True, manufacturer="Tile"),
-        "15:09:c2:45:24:28": dev("15:09:c2:45:24:28", is_tile=True),                     # bound: hidden
+        "15:09:c2:45:24:28": dev("15:09:c2:45:24:28", is_tile=True),  # bound: hidden
     }
     tile_manager = SimpleNamespace(bound_sources=lambda: {"15:09:c2:45:24:28"})
     hass, entry, _ = _mgmt_hass(devices=devices)
@@ -642,7 +672,7 @@ def test_options_are_read_and_written_within_the_managed_set():
 
     hass, entry, updates = _mgmt_hass()
     entry.options.update({"ref_power": -55, "attenuation": 3.0, "rssi_offsets": {"x": 1}})
-    assert async_get_options(hass) == {"ref_power": -55, "attenuation": 3.0}   # rssi_offsets has its own API
+    assert async_get_options(hass) == {"ref_power": -55, "attenuation": 3.0}  # rssi_offsets has its own API
     out = asyncio.run(async_set_options(hass, {"attenuation": 2.5}))
     assert out["attenuation"] == 2.5 and entry.options["rssi_offsets"] == {"x": 1} and len(updates) == 1
     with pytest.raises(ValueError):
@@ -677,6 +707,7 @@ def test_options_include_the_defaults_in_force():
 
 def test_management_is_advertised_as_a_feature():
     from custom_components.bermuda.api import SNAPSHOT_FEATURES
+
     assert "device_management" in SNAPSHOT_FEATURES
 
 

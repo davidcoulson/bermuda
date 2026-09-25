@@ -31,13 +31,13 @@ from homeassistant.helpers import floor_registry as fr
 from homeassistant.util import slugify
 
 from .bermuda_advert import BermudaAdvert
-from .device_family import identify as identify_family
 from .const import (
     _LOGGER,
     _LOGGER_SPAM_LESS,
     ADDR_TYPE_FINDMY,
     ADDR_TYPE_IBEACON,
     ADDR_TYPE_PRIVATE_BLE_DEVICE,
+    ADDR_TYPE_TILE,
     BDADDR_TYPE_NOT_MAC48,
     BDADDR_TYPE_OTHER,
     BDADDR_TYPE_RANDOM_RESOLVABLE,
@@ -53,14 +53,15 @@ from .const import (
     METADEVICE_FINDMY_DEVICE,
     METADEVICE_IBEACON_DEVICE,
     METADEVICE_PRIVATE_BLE_DEVICE,
-    METADEVICE_TYPE_IBEACON_SOURCE,
     METADEVICE_TILE_DEVICE,
-    ADDR_TYPE_TILE,
+    METADEVICE_TYPE_IBEACON_SOURCE,
     TILE_METADEVICE_PREFIX,
     TILE_REF_POWER,
     TILE_SERVICE_UUIDS,
 )
-from .util import mac_math_offset, mac_norm, mac_octet_offset as _mac_octet_offset
+from .device_family import identify as identify_family
+from .util import mac_math_offset, mac_norm
+from .util import mac_octet_offset as _mac_octet_offset
 
 if TYPE_CHECKING:
     from bleak.backends.scanner import AdvertisementData
@@ -819,7 +820,8 @@ class BermudaDevice:
             self.first_seen = device_advert.stamp
 
     def process_tile(self, advert: BermudaAdvert) -> bool:
-        """Identify a Tile tracker by its 0xFEED service advertisement.
+        """
+        Identify a Tile tracker by its 0xFEED service advertisement.
 
         The ESPresense port: on first recognition the device is marked as a
         Tile, named as one, and its per-device ref_power set to

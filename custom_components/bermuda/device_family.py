@@ -1,4 +1,5 @@
-"""What kind of thing an advert came from, when the SIG lists cannot say.
+"""
+What kind of thing an advert came from, when the SIG lists cannot say.
 
 Bermuda resolves a manufacturer from the Bluetooth SIG's company and member
 UUID lists (see ``BermudaDataUpdateCoordinator.get_manufacturer_from_id``).
@@ -33,20 +34,20 @@ class Family(NamedTuple):
 # Manufacturer ids that are not the company the SIG assigned them to, or that
 # are unassigned and used anyway. Keyed by the id in the advert.
 MANUFACTURER_IDS: dict[int, Family] = {
-    0x8843: Family("Govee sensor"),   # Govee_H7038: mfr id 0x8843, payload ec00020100
-    0x4269: Family("Tigo optimiser"), # TAP-723A: mfr id 0x4269, payload "TigoCC"
+    0x8843: Family("Govee sensor"),  # Govee_H7038: mfr id 0x8843, payload ec00020100
+    0x4269: Family("Tigo optimiser"),  # TAP-723A: mfr id 0x4269, payload "TigoCC"
 }
 
 # 16-bit service UUIDs. The SIG says who registered them; these say what the
 # device is, which is what someone reading a list of adverts wants.
 SERVICE_UUIDS: dict[int, Family] = {
-    0xFEED: Family("Tile tracker", rotates=True),      # Bermuda's own Tile detection, see const.py
+    0xFEED: Family("Tile tracker", rotates=True),  # Bermuda's own Tile detection, see const.py
     0xFD5A: Family("Samsung SmartTag", rotates=True),  # SmartThings Find tags
     0xFEAA: Family("Eddystone beacon"),
     0xFD6F: Family("Exposure notification", rotates=True),  # COVID contact tracing, rotates by design
     0xFE2C: Family("Google Fast Pair"),
     0xFE95: Family("Xiaomi sensor"),
-    0xFCD2: Family("BTHome sensor"),                   # already named by the SIG list; kept for the family view
+    0xFCD2: Family("BTHome sensor"),  # already named by the SIG list; kept for the family view
 }
 
 # Local-name prefixes, for devices whose name is the only clue. Matched
@@ -65,7 +66,8 @@ NAME_PREFIXES: tuple[tuple[str, Family], ...] = (
 
 
 def _uuid16(uuid) -> int | None:
-    """The 16-bit id of a service UUID, or None if it is not a 16-bit one.
+    """
+    The 16-bit id of a service UUID, or None if it is not a 16-bit one.
 
     Adverts carry these either as the bare id or expanded into the SIG's base
     UUID (0000xxxx-0000-1000-8000-00805f9b34fb).
@@ -90,7 +92,8 @@ def _uuid16(uuid) -> int | None:
 
 
 def identify(service_uuids=None, service_data=None, manufacturer_data=None, name=None) -> Family | None:
-    """The family this advert belongs to, or None when nothing recognises it.
+    """
+    The family this advert belongs to, or None when nothing recognises it.
 
     Signatures are tried strongest first: a service UUID is deliberate, a
     manufacturer id is nearly so, and a name is whatever someone typed.
@@ -101,7 +104,7 @@ def identify(service_uuids=None, service_data=None, manufacturer_data=None, name
             if found:
                 return found
 
-    for company in (manufacturer_data or {}):
+    for company in manufacturer_data or {}:
         try:
             found = MANUFACTURER_IDS.get(int(company))
         except (TypeError, ValueError):

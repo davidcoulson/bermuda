@@ -168,7 +168,8 @@ async def async_remove_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> 
 
 
 async def async_reload_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> None:
-    """Reload config entry - unless the change is already live in memory.
+    """
+    Reload config entry - unless the change is already live in memory.
 
     api.async_set_rssi_offsets applies new offsets to the running coordinator
     and then persists them to the entry so they survive a restart. That
