@@ -182,6 +182,14 @@ PRUNE_TIME_UNKNOWN_IRK = 240  # Resolvable Private addresses change often, prune
 PRUNE_TIME_KNOWN_IRK: Final[int] = 16 * 60  # spec "recommends" 15 min max address age. Round up to 16 :-)
 
 PRUNE_TIME_REDACTIONS: Final[int] = 10 * 60  # when to discard redaction data
+# An advert (one device as heard by one scanner) that has timed out, holds no
+# history and has not been heard for this long is dropped. A device is kept for
+# a day (PRUNE_TIME_DEFAULT) and gathers an advert for every scanner that ever
+# heard it once, so most adverts on a big install are long silent - and every
+# one of them was still walked every update (~900k calls a minute on a
+# 60-proxy house) and tracked by the garbage collector. A new advert from that
+# scanner starts afresh, exactly as a timed-out one does.
+PRUNE_TIME_ADVERT: Final[int] = 10 * 60
 
 # FindMy accessories (AirTags and licensed third-party tags).
 #

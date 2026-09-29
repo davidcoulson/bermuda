@@ -95,6 +95,7 @@ from .const import (
     METADEVICE_TYPE_IBEACON_SOURCE,
     METADEVICE_TYPE_PRIVATE_BLE_SOURCE,
     PRUNE_MAX_COUNT,
+    PRUNE_TIME_ADVERT,
     PRUNE_TIME_DEFAULT,
     PRUNE_TIME_INTERVAL,
     PRUNE_TIME_KNOWN_IRK,
@@ -1127,6 +1128,40 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                         nowstamp - device.adverts[advert_tuple].stamp,
                     )
                     del device.adverts[advert_tuple]
+
+        self._prune_silent_adverts(nowstamp)
+
+    def _prune_silent_adverts(self, nowstamp: float) -> int:
+        """
+        Drop adverts that timed out long ago (see PRUNE_TIME_ADVERT).
+
+        An advert qualifies only when calculate_data would leave it untouched
+        anyway: no distance, no smoothing history, nothing pending, and not
+        heard for PRUNE_TIME_ADVERT. The test is on the advert object, and every
+        device's dict is swept, so a metadevice (which copies its sources'
+        advert objects every cycle) and its source lose it together - neither
+        can hand it back to the other. Returns how many were dropped.
+        """
+        cutoff = nowstamp - PRUNE_TIME_ADVERT
+        dropped = 0
+        for device in self.devices.values():
+            adverts = getattr(device, "adverts", None)
+            if not adverts:
+                continue
+            silent = [
+                key
+                for key, advert in adverts.items()
+                if getattr(advert, "rssi_distance", None) is None
+                and getattr(advert, "new_stamp", None) is None
+                and not getattr(advert, "hist_distance_by_interval", None)
+                and (getattr(advert, "stamp", None) is None or advert.stamp < cutoff)
+            ]
+            for key in silent:
+                del adverts[key]
+            dropped += len(silent)
+        if dropped:
+            _LOGGER.debug("Pruned %d silent adverts", dropped)
+        return dropped
 
     def discover_private_ble_metadevices(self):
         """

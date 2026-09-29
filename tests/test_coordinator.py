@@ -259,6 +259,7 @@ def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
         irk_manager=SimpleNamespace(async_prune=lambda: None),
         _get_device=lambda address: devices.get(address),
     )
+    coordinator._prune_silent_adverts = lambda now: BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
 
     # Previously raised KeyError on the second delete of the same address.
     BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
@@ -266,3 +267,47 @@ def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
     # Pruned exactly once, the run completed, and the current source survived.
     assert stale_irk not in coordinator.devices
     assert fresh_irk in coordinator.devices
+
+
+def test_prune_silent_adverts_drops_only_long_dead_ones():
+    """Adverts that timed out, hold no history and have not been heard for
+    PRUNE_TIME_ADVERT are dropped - from the source device and from the
+    metadevice that copied the same object, so neither hands it back."""
+    from custom_components.bermuda.const import PRUNE_TIME_ADVERT
+
+    now = 100_000.0
+    old = now - PRUNE_TIME_ADVERT - 1
+
+    def ad(stamp, distance=None, hist=(), new_stamp=None):
+        return SimpleNamespace(
+            stamp=stamp, rssi_distance=distance, hist_distance_by_interval=list(hist), new_stamp=new_stamp
+        )
+
+    dead = ad(old)
+    shared_dead = ad(old)
+    recent_silent = ad(now - 30)  # timed out, but only just: kept
+    live = ad(old, distance=2.5)  # still has a distance
+    with_history = ad(old, hist=[3.0])  # history not yet cleared
+    pending = ad(old, new_stamp=now)  # an update waiting to be processed
+    never_stamped = ad(None)
+
+    source = SimpleNamespace(
+        adverts={
+            ("a", "s1"): dead,
+            ("a", "s2"): shared_dead,
+            ("a", "s3"): recent_silent,
+            ("a", "s4"): live,
+            ("a", "s5"): with_history,
+            ("a", "s6"): pending,
+            ("a", "s7"): never_stamped,
+        }
+    )
+    metadevice = SimpleNamespace(adverts={("a", "s2"): shared_dead, ("a", "s4"): live})
+    empty = SimpleNamespace(adverts={})
+    coordinator = SimpleNamespace(devices={"a": source, "meta": metadevice, "e": empty})
+
+    dropped = BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
+
+    assert dropped == 4
+    assert set(source.adverts) == {("a", "s3"), ("a", "s4"), ("a", "s5"), ("a", "s6")}
+    assert set(metadevice.adverts) == {("a", "s4")}, "the shared dead advert goes from the metadevice too"
