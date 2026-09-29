@@ -539,7 +539,13 @@ def _ensure_aware(value: datetime) -> datetime:
 class _TableState:
     """The current MAC lookup table and when it was built."""
 
-    macs: dict[str, FindMyMacMatch] = field(default_factory=dict)
+    # address -> (accessory_id, index, key_type), as plain tuples. A tuple that
+    # holds only strings and numbers is dropped from the cyclic garbage
+    # collector's books at its first collection; a FindMyMacMatch (or any
+    # instance, a NamedTuple included) never is. With a dozen accessories the
+    # table is ~14,600 entries, rebuilt every key interval, and as objects
+    # that was 14,600 things for every full collection to walk.
+    macs: dict[str, tuple[str, int, str]] = field(default_factory=dict)
     built_at: datetime | None = None
 
 
@@ -597,7 +603,8 @@ class BermudaFindMyManager:
 
     def check_mac(self, address: str) -> FindMyMacMatch | None:
         """Look up an observed address. Cheap - a dict hit on a precomputed table."""
-        return self._table.macs.get(address)
+        entry = self._table.macs.get(address)
+        return None if entry is None else FindMyMacMatch(*entry)
 
     def needs_refresh(self, now: datetime | None = None) -> bool:
         """Whether the lookup table has aged out of its interval."""
@@ -624,7 +631,10 @@ class BermudaFindMyManager:
         macs: dict[str, FindMyMacMatch] = {}
         for accessory in accessories:
             macs.update(accessory.macs_for_window(now))
-        self._table = _TableState(macs=macs, built_at=now)
+        self._table = _TableState(
+            macs={mac: (m.accessory_id, m.index, m.key_type) for mac, m in macs.items()},
+            built_at=now,
+        )
         _LOGGER.debug(
             "FindMy MAC table rebuilt: %d addresses across %d accessories",
             len(macs),

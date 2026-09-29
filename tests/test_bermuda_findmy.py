@@ -21,6 +21,7 @@ from custom_components.bermuda.bermuda_findmy import (
     BermudaFindMyManager,
     FindMyAccessoryKeys,
     FindMyKeyError,
+    FindMyMacMatch,
     mac_from_public_key,
 )
 
@@ -822,3 +823,23 @@ def test_a_sighting_restarts_the_hunt_from_where_it_was_seen():
     resumed = acc.sweep_range(later)
     assert resumed is not None
     assert resumed[0] == 69790 - FINDMY_LOOKBEHIND_INDICES
+
+
+def test_the_lookup_table_is_tuples_the_collector_ignores() -> None:
+    """The table is thousands of entries, rebuilt every key interval. As plain
+    tuples they drop out of the cyclic collector's books; the match object is
+    built on lookup, for the one address that matched."""
+    import gc
+
+    manager = BermudaFindMyManager()
+    manager.add_accessory(_accessory())
+    manager.build_table(datetime.fromisoformat(PAIRED_AT) + timedelta(hours=1))
+    table = manager._table.macs  # noqa: SLF001
+    assert table
+    assert all(type(v) is tuple and len(v) == 3 for v in table.values())
+    gc.collect()
+    assert not any(gc.is_tracked(v) for v in table.values())
+    mac, entry = next(iter(table.items()))
+    match = manager.check_mac(mac)
+    assert isinstance(match, FindMyMacMatch)
+    assert (match.accessory_id, match.index, match.key_type) == entry
