@@ -51,6 +51,7 @@ from homeassistant.helpers.device_registry import (
     EventDeviceRegistryUpdatedData,
 )
 from homeassistant.helpers.dispatcher import async_dispatcher_send
+from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import get_age, now
@@ -318,7 +319,13 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         # Device management without the options flow (see api.py): what a
         # front end such as Sextant, or an automation, needs to add trackers,
         # FindMy accessories and change global options.
-        hass.services.async_register(
+        #
+        # Home Assistant lets any signed-in user call any ordinary service, so
+        # these are admin services: a call made by a person must come from an
+        # administrator, while automations and scripts carry no user and still
+        # work.
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "track_devices",
             self.service_track_devices,
@@ -330,42 +337,48 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             ),
             SupportsResponse.OPTIONAL,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "list_device_candidates",
             self.service_list_device_candidates,
             vol.Schema({vol.Optional("max_age", default=7200): vol.Coerce(float)}),
             SupportsResponse.ONLY,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "add_findmy_accessory",
             self.service_add_findmy_accessory,
             vol.Schema({vol.Required("accessory_json"): cv.string, vol.Optional("name"): cv.string}),
             SupportsResponse.OPTIONAL,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "remove_findmy_accessory",
             self.service_remove_findmy_accessory,
             vol.Schema({vol.Required("address"): cv.string}),
             SupportsResponse.OPTIONAL,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "set_options",
             self.service_set_options,
             vol.Schema({vol.Required("options"): dict}),
             SupportsResponse.OPTIONAL,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "bind_tile",
             self.service_bind_tile,
             vol.Schema({vol.Required("tile_id"): cv.string, vol.Required("tile_uid"): cv.string}),
             SupportsResponse.OPTIONAL,
         )
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "bind_tile_address",
             self.service_bind_tile_address,
@@ -374,7 +387,8 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         )
 
         # Register the dump_devices service
-        hass.services.async_register(
+        async_register_admin_service(
+            hass,
             DOMAIN,
             "dump_devices",
             self.service_dump_devices,
