@@ -311,7 +311,7 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 options_metadevices.append(
                     SelectOptionDict(
                         value=device.address.upper(),
-                        label=f"Tile: {device.address} {source_mac} " f"{name if device.address != name else ''}",
+                        label=f"Tile: {device.address} {source_mac} {name if device.address != name else ''}",
                     )
                 )
                 continue

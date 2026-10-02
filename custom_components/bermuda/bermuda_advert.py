@@ -530,7 +530,7 @@ class BermudaAdvert:
         # linting and typing can catch errors.
         out = {}
         for var, val in vars(self).items():
-            if val in [self.options]:
+            if val == self.options:
                 # skip certain vars that we don't want in the dump output.
                 continue
             if val in [self.options, self._device, self.scanner_device]:

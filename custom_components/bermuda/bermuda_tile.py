@@ -38,7 +38,9 @@ import os
 from collections import deque
 from typing import TYPE_CHECKING, Any
 
+from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
 from bluetooth_data_tools import monotonic_time_coarse
+from homeassistant.components import bluetooth
 from homeassistant.core import callback
 from homeassistant.helpers.storage import Store
 
@@ -126,7 +128,7 @@ class TileNoIdCharacteristicError(Exception):
     """Connected, but the Tile exposes no way to read a Tile ID; str() lists what it does expose."""
 
 
-async def _read_uid_over_mep(client, timeout: float = TILE_TDI_TIMEOUT) -> str:
+async def _read_uid_over_mep(client) -> str:
     """
     The connectionless TDI "read tile id" exchange on the MEP characteristics.
 
@@ -147,7 +149,10 @@ async def _read_uid_over_mep(client, timeout: float = TILE_TDI_TIMEOUT) -> str:
     await client.start_notify(MEP_RSP_UUID, on_response)
     try:
         await client.write_gatt_char(MEP_CMD_UUID, bytes([0, *cid, TOA_CMD_TDI, TDI_READ_TILE_ID]), response=False)
-        payload = await asyncio.wait_for(answer, timeout)
+        # Only the wait for the answer is bounded, as before: TILE_TDI_TIMEOUT is read
+        # here, not bound as a default, so a test can shorten it.
+        async with asyncio.timeout(TILE_TDI_TIMEOUT):
+            payload = await answer
     finally:
         with contextlib.suppress(Exception):
             await client.stop_notify(MEP_RSP_UUID)
@@ -169,9 +174,6 @@ async def async_read_tile_uid(hass, address: str) -> str | None:
     path exists right now (no active proxy hears it), and whatever bleak
     raises when the connection or read fails.
     """
-    from bleak_retry_connector import BleakClientWithServiceCache, establish_connection
-    from homeassistant.components import bluetooth
-
     ble_device = bluetooth.async_ble_device_from_address(hass, address.upper(), connectable=True)
     if ble_device is None:
         msg = f"no connectable scanner hears {address}"

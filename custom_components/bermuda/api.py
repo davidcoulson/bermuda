@@ -34,6 +34,8 @@ from bluetooth_data_tools import monotonic_time_coarse
 from homeassistant.core import callback
 from homeassistant.util import slugify
 
+from .bermuda_findmy import FindMyAccessoryKeys
+from .bermuda_tile import tile_metadevice_id
 from .const import (
     ADDR_TYPE_FINDMY,
     ADDR_TYPE_IBEACON,
@@ -443,8 +445,6 @@ def async_get_device_candidates(hass: HomeAssistant, max_age: float = CANDIDATE_
         if address_type == ADDR_TYPE_TILE:
             kind, config_value = "tile", address.upper()
         elif is_tile:
-            from .bermuda_tile import tile_metadevice_id
-
             kind, config_value = "tile", tile_metadevice_id(address).upper()
         elif address_type == ADDR_TYPE_IBEACON:
             kind, config_value = "ibeacon", address.upper()
@@ -554,8 +554,6 @@ async def async_add_findmy_accessory(hass: HomeAssistant, accessory_json: str, n
 
     Raises FindMyKeyError on bad input. Returns None if Bermuda is not set up.
     """
-    from .bermuda_findmy import FindMyAccessoryKeys
-
     entry, coordinator = _entry_and_coordinator(hass)
     if entry is None or coordinator is None:
         return None
