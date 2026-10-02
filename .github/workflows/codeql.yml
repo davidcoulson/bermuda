@@ -8,10 +8,9 @@ on:
     branches: [fork-testing]
   pull_request:
     branches: [fork-testing]
-  # No schedule: GitHub runs scheduled workflows only from the default branch
-  # (main), so a cron here would never fire. Run it by hand to rescan with
-  # newer CodeQL queries.
-  workflow_dispatch:
+  # No schedule or workflow_dispatch: GitHub starts both only from a workflow
+  # on the default branch (main), and this one lives on fork-testing. To
+  # rescan with newer CodeQL queries, re-run the latest CodeQL run.
 
 permissions:
   contents: read
