@@ -272,7 +272,7 @@ DOCS[CONF_MAX_RADIUS] = "For simple area-detection, max radius from receiver"
 CONF_MAX_VELOCITY, DEFAULT_MAX_VELOCITY = "max_velocity", 3
 DOCS[CONF_MAX_VELOCITY] = (
     "In metres per second - ignore readings that imply movement away faster than",
-    "this limit. 3m/s (10km/h) is good.",  # fmt: skip
+    "this limit. 3m/s (10km/h) is good.",
 )
 
 CONF_DEVTRACK_TIMEOUT, DEFAULT_DEVTRACK_TIMEOUT = "devtracker_nothome_timeout", 30
@@ -298,7 +298,7 @@ CONF_TILE_PROBES = "tile_identity_probes"
 CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL = "update_interval", 10
 DOCS[CONF_UPDATE_INTERVAL] = (
     "Maximum time between sensor updates in seconds. Smaller intervals",
-    "means more data, bigger database.",  # fmt: skip
+    "means more data, bigger database.",
 )
 
 CONF_SMOOTHING_SAMPLES, DEFAULT_SMOOTHING_SAMPLES = "smoothing_samples", 20

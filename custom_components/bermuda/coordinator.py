@@ -55,6 +55,7 @@ from homeassistant.helpers.storage import Store
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator
 from homeassistant.util.dt import get_age, now
 
+from . import api
 from .bermuda_device import BermudaDevice
 from .bermuda_findmy import BermudaFindMyManager, FindMyKeyError, FindMyMacMatch, parse_findmy_datetime
 from .bermuda_irk import BermudaIrkManager
@@ -1984,7 +1985,6 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     # --- device management services (thin wrappers over api.py) -----------------
 
     async def service_track_devices(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         devices = await api.async_set_tracked_devices(
             self.hass, add=call.data.get("add", []), remove=call.data.get("remove", [])
@@ -1992,13 +1992,10 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return {"configured_devices": devices or []}
 
     async def service_list_device_candidates(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         return {"candidates": api.async_get_device_candidates(self.hass, max_age=call.data.get("max_age", 7200)) or []}
 
     async def service_add_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
-        from .bermuda_findmy import FindMyKeyError
 
         try:
             added = await api.async_add_findmy_accessory(self.hass, call.data["accessory_json"], call.data.get("name"))
@@ -2008,13 +2005,11 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return added or {}
 
     async def service_remove_findmy_accessory(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         removed = await api.async_remove_findmy_accessory(self.hass, call.data["address"])
         return {"removed": bool(removed)}
 
     async def service_set_options(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         try:
             options = await api.async_set_options(self.hass, dict(call.data["options"]))
@@ -2023,7 +2018,6 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return {"options": options or {}}
 
     async def service_bind_tile_address(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         try:
             bound = await api.async_bind_tile_address(self.hass, call.data["tile_id"], call.data["address"])
@@ -2032,7 +2026,6 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         return bound or {}
 
     async def service_bind_tile(self, call: ServiceCall) -> ServiceResponse:
-        from . import api
 
         try:
             bound = await api.async_bind_tile(self.hass, call.data["tile_id"], call.data["tile_uid"])

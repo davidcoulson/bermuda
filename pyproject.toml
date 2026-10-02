@@ -3,14 +3,13 @@ max-line-length=120
 
 # Adapted from https://github.com/ludeeus/integration_blueprint/blob/main/.ruff.toml
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"  # Python of the oldest Home Assistant in hacs.json (2025.3)
 line-length = 120        # This is all me and not HA - I will die on the hill that 80 is too short
 
 [tool.ruff.lint]
 select = ["ALL"]
 
 ignore = [
-    "ANN101",  # Missing type annotation for `self` in method
     "ANN401",  # Dynamically typed expressions (typing.Any) are disallowed
     "D203",    # no-blank-line-before-class (incompatible with formatter)
     "D212",    # multi-line-summary-first-line (incompatible with formatter)
@@ -47,6 +46,7 @@ ignore = [
     "PGH003",  # Use specific rule codes when ignore type issues
     "D404",    # First word of the dosctring should not be "This"
     "PLR0913", # Too many arguments
+    "CPY001",  # Copyright notice in every file - the project has one LICENSE instead
 ]
 
 [tool.ruff.lint.flake8-pytest-style]
@@ -62,7 +62,8 @@ max-complexity = 25
 # Command-line programs, not part of the integration: printing is what they do,
 # and they run under whatever Python the user has rather than HA's.
 "tools/**/*.py" = [
-    "T201",  # print - the tool's entire output
+    "T201",     # print - the tool's entire output
+    "PLC0415",  # optional dependencies are imported where used, so --help works without them
 ]
 "tests/**/*.py" = [
     "S101",  # asserts allowed in tests...

@@ -436,10 +436,8 @@ def _offset_fixture():
         },
         inline_options=None,
     )
-    coordinator.async_apply_rssi_offsets = (
-        lambda offsets, merge=True: BermudaDataUpdateCoordinator.async_apply_rssi_offsets(
-            coordinator, offsets, merge=merge
-        )
+    coordinator.async_apply_rssi_offsets = lambda offsets, merge=True: (
+        BermudaDataUpdateCoordinator.async_apply_rssi_offsets(coordinator, offsets, merge=merge)
     )
     entry = SimpleNamespace(
         entry_id="e1",

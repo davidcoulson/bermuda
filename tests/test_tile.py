@@ -669,12 +669,13 @@ def test_tdi_read_frames_the_request_and_parses_the_tile_id():
     asyncio.run(scenario())
 
 
-def test_tdi_read_reports_no_id_and_silence():
+def test_tdi_read_reports_no_id_and_silence(monkeypatch):
     async def scenario():
         with pytest.raises(bermuda_tile.TileNoIdCharacteristicError):
             await bermuda_tile._read_uid_over_mep(_MepClient(bytes([bermuda_tile.TDI_ERROR, 1])))
+        monkeypatch.setattr(bermuda_tile, "TILE_TDI_TIMEOUT", 0.05)
         with pytest.raises(asyncio.TimeoutError):
-            await bermuda_tile._read_uid_over_mep(_MepClient(None), timeout=0.05)
+            await bermuda_tile._read_uid_over_mep(_MepClient(None))
 
     asyncio.run(scenario())
 
