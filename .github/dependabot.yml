@@ -1,14 +1,27 @@
 version: 2
+# This is a fork: development happens on fork-testing, not the default branch.
 updates:
   - package-ecosystem: github-actions
     directory: "/"
+    target-branch: fork-testing
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      actions:
+        patterns: ["*"]
   - package-ecosystem: pip
     directory: "/.github/workflows"
+    target-branch: fork-testing
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      ci-tools:
+        patterns: ["*"]
   - package-ecosystem: pip
     directory: "/"
+    target-branch: fork-testing
     schedule:
-      interval: daily
+      interval: weekly
+    groups:
+      python:
+        patterns: ["*"]
