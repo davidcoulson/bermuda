@@ -55,6 +55,12 @@ from .const import (
 from .util import mac_math_offset, mac_norm
 from .util import mac_octet_offset as _mac_octet_offset
 
+# Integrations that provide Bluetooth scanners. When two registry entries
+# carry the same MAC - an ESPHome proxy and the router integration that also
+# tracks it as a network client - the scanner's own entry is the one from
+# one of these.
+SCANNER_DOMAINS: Final = frozenset({"bluetooth", "esphome", "shelly", "ruuvi_gateway"})
+
 if TYPE_CHECKING:
     from bleak.backends.scanner import AdvertisementData
 
@@ -274,6 +280,21 @@ class BermudaDevice(dict):
         if _first_init:
             self.async_as_scanner_update(ha_scanner)
 
+    def _from_scanner_integration(self, devreg_device) -> bool:
+        """
+        Whether a device-registry entry belongs to an integration that
+        provides Bluetooth scanners (SCANNER_DOMAINS).
+        """
+        hass = getattr(self._coordinator, "hass", None)
+        get_entry = getattr(getattr(hass, "config_entries", None), "async_get_entry", None)
+        if get_entry is None:
+            return False
+        for entry_id in getattr(devreg_device, "config_entries", None) or ():
+            entry = get_entry(entry_id)
+            if getattr(entry, "domain", None) in SCANNER_DOMAINS:
+                return True
+        return False
+
     def async_as_scanner_resolve_device_entries(self):
         """From the known MAC address, resolve any relevant device entries and names etc."""
         # As of 2025.2.0 The bluetooth integration creates its own device entries
@@ -333,8 +354,12 @@ class BermudaDevice(dict):
         # connection IS this address; then the espressif rule this window
         # exists for (BLE = WiFi + 2); then Ethernet (BLE = Ether - 1); then
         # anything else. Registry order only breaks exact ties.
+        # Equal ranks go to the entry from an integration that provides
+        # Bluetooth scanners: a router integration (TP-Link, UniFi, Fritz)
+        # can register the same hardware under the same WiFi MAC, with its
+        # own name ("linux") and no area (#722).
         bt_candidates: list[tuple[int, int, Any, str]] = []
-        mac_candidates: list[tuple[int, int, Any, str]] = []
+        mac_candidates: list[tuple[int, int, int, Any, str]] = []
         for devreg_device in devreg_devices:
             devreg_count += 1
             # _LOGGER.debug("DevregScanner: %s", devreg_device)
@@ -358,11 +383,14 @@ class BermudaDevice(dict):
                         rank = 2
                     else:
                         rank = 3
-                    mac_candidates.append((rank, devreg_count, devreg_device, conn[1]))
+                    foreign = 0 if self._from_scanner_integration(devreg_device) else 1
+                    mac_candidates.append((rank, foreign, devreg_count, devreg_device, conn[1]))
         if bt_candidates:
             _rank, _order, scanner_devreg_bt, scanner_devreg_bt_address = min(bt_candidates, key=lambda c: c[:2])
         if mac_candidates:
-            _rank, _order, scanner_devreg_mac, scanner_devreg_mac_address = min(mac_candidates, key=lambda c: c[:2])
+            _rank, _foreign, _order, scanner_devreg_mac, scanner_devreg_mac_address = min(
+                mac_candidates, key=lambda c: c[:3]
+            )
 
         if devreg_count not in (1, 2, 3):
             # We expect just the bt, or bt and another like esphome/shelly, or
@@ -407,6 +435,14 @@ class BermudaDevice(dict):
             self.entry_id = self.entry_id or scanner_devreg_mac.id
             _mac_name = scanner_devreg_mac.name
             _mac_name_by_user = scanner_devreg_mac.name_by_user
+            if _area_id is None:
+                # Still no area: another entry for the same hardware (the
+                # same MAC) may have one - the user put the device in a room
+                # once, on whichever integration's page they found it.
+                for cand in sorted(mac_candidates, key=lambda c: c[:3]):
+                    if cand[4].lower() == str(scanner_devreg_mac_address).lower() and cand[3].area_id:
+                        _area_id = cand[3].area_id
+                        break
 
         # As of ESPHome 2025.3.0 (via aioesphomeapi 29.3.1) ESPHome proxies now
         # report their BLE MAC address instead of their WIFI MAC in the hascanner
