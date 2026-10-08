@@ -451,3 +451,27 @@ def test_scanner_integration_is_read_from_config_entry_id_on_current_cores(mock_
     # An older core: no config_entry_id, the set of entries is read instead.
     assert scanner._from_scanner_integration(SimpleNamespace(config_entries={"e-tp"})) is False
     assert scanner._from_scanner_integration(SimpleNamespace(config_entries={"e-tp", "e-esp"})) is True
+
+
+def test_settled_adverts_are_not_recalculated(mock_coordinator):
+    """BermudaDevice.calculate_data skips exactly the adverts whose own
+    calculate_data would return at once: away, cleared, nothing new."""
+    from custom_components.bermuda.bermuda_advert import BermudaAdvert, advert_is_settled
+
+    class Counting(BermudaAdvert):
+        def __init__(self, new_stamp, rssi_distance, hist):  # pylint: disable=super-init-not-called
+            self.new_stamp, self.rssi_distance, self.hist_distance_by_interval = new_stamp, rssi_distance, hist
+            self.calls = 0
+
+        def calculate_data(self):
+            self.calls += 1
+
+    settled = Counting(None, None, [])
+    new_reading = Counting(123.0, None, [])
+    still_near = Counting(None, 2.5, [2.5])
+    clearing = Counting(None, None, [3.0])
+    device = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
+    device.adverts = {("a", "1"): settled, ("a", "2"): new_reading, ("a", "3"): still_near, ("a", "4"): clearing}
+    device.calculate_data()
+    assert [settled.calls, new_reading.calls, still_near.calls, clearing.calls] == [0, 1, 1, 1]
+    assert [advert_is_settled(a) for a in (settled, new_reading, still_near, clearing)] == [True, False, False, False]

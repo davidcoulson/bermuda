@@ -938,12 +938,18 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
             scanner_device.async_as_scanner_update(ha_scanner)
 
+            # This scanner's stamps, looked up once rather than through
+            # async_as_scanner_get_stamp for each of its devices (~4,000 calls
+            # a cycle on a 69-proxy install): the same answer - a remote
+            # scanner's stamps dict, or nothing for a local adaptor.
+            stamps = scanner_device.stamps if scanner_device.is_remote_scanner else None
+            cutoff = self.stamp_last_update_started - 3
+
             # Now go through the scanner's adverts and send them to our device objects.
             for bledevice, advertisementdata in ha_scanner.discovered_devices_and_advertisement_data.values():
-                if adstamp := scanner_device.async_as_scanner_get_stamp(bledevice.address):
-                    if adstamp < self.stamp_last_update_started - 3:
-                        # skip older adverts that should already have been processed
-                        continue
+                if stamps and (adstamp := stamps.get(bledevice.address.upper())) and adstamp < cutoff:
+                    # skip older adverts that should already have been processed
+                    continue
                 if advertisementdata.rssi == -127:
                     # BlueZ is pushing bogus adverts for paired but absent devices.
                     continue
