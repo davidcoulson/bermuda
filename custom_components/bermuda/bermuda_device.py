@@ -464,6 +464,10 @@ class BermudaDevice:
         # First clear the existing to make prioritising the bt/mac matches
         # easier (feel free to refactor, bear in mind we prefer bt first)
         _area_id = None
+        # A re-resolve (a registry change) starts from nothing: the entry_id
+        # of an earlier, wrong winner - a router's entry for the same MAC -
+        # must not survive next to the new winner's name and area.
+        self.entry_id = None
 
         _bt_name = None
         _mac_name = None
