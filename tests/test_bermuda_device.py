@@ -326,3 +326,36 @@ def test_scanner_area_comes_from_another_entry_for_the_same_hardware(mock_coordi
         assert scanner.entry_id == "esp" and scanner.name_devreg == "TECHO5 proxy"
         # The router's area (same MAC), never the neighbour light's (different MAC).
         assert scanner.area_id == "office", [d.id for d in order]
+
+
+def test_a_re_resolve_replaces_an_earlier_winners_entry_id(mock_coordinator, mock_remote_scanner):
+    """A scanner first resolved to the router's entry (the scanner
+    integration's entry not registered yet), then re-resolved once it is,
+    must carry the new winner's entry_id, not keep the router's."""
+    from types import SimpleNamespace
+
+    _with_domains(mock_coordinator, {"e-esp": "esphome", "e-tp": "tplink"})
+    esphome = SimpleNamespace(
+        id="esp",
+        name="TECHO5 proxy",
+        name_by_user=None,
+        area_id="office",
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-esp"},
+    )
+    router = SimpleNamespace(
+        id="tplink",
+        name="linux",
+        name_by_user=None,
+        area_id=None,
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-tp"},
+    )
+    scanner = BermudaDevice(address="AA:BB:CC:DD:EE:12", coordinator=mock_coordinator)
+    scanner._hascanner = mock_remote_scanner
+    mock_coordinator.dr.devices.get_entries = MagicMock(return_value=[router])
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.entry_id == "tplink"
+    mock_coordinator.dr.devices.get_entries = MagicMock(return_value=[router, esphome])
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.entry_id == "esp" and scanner.name_devreg == "TECHO5 proxy" and scanner.area_id == "office"
