@@ -251,3 +251,182 @@ def test_address_type_classifier_uses_the_top_two_bits(mock_coordinator, first_c
         mock_coordinator.irk_manager.check_mac.assert_called_once_with(f"{first_char}a:bb:cc:dd:ee:ff")
     else:
         mock_coordinator.irk_manager.check_mac.assert_not_called()
+
+
+def test_scanner_registry_match_ignores_a_neighbour_two_above(mock_coordinator, mock_remote_scanner):
+    """Issue #859: two ESP32-S3 proxies with adjacent MACs. Proxy A's BLE MAC
+    (..:6e) is its own WiFi MAC (..:6c) + 2 and also proxy B's WiFi MAC
+    (..:70) - 2, so both ESPHome entries fall in the +-3 window. A must keep
+    its own name and WiFi MAC whatever order the registry returns them in."""
+    from types import SimpleNamespace
+
+    bluetooth_a = SimpleNamespace(
+        id="bt-a",
+        name="Bluetooth Proxy 44696c",
+        name_by_user=None,
+        area_id="bedroom",
+        connections={("bluetooth", "1C:69:7A:44:69:6E")},
+    )
+    esphome_a = SimpleNamespace(
+        id="esp-a",
+        name="ESP32-S3 Bluetooth Proxy 44696c",
+        name_by_user=None,
+        area_id="bedroom",
+        connections={("mac", "1c:69:7a:44:69:6c")},
+    )
+    esphome_b = SimpleNamespace(
+        id="esp-b",
+        name="ESP32-S3 Bluetooth Proxy 446970",
+        name_by_user=None,
+        area_id="bathroom",
+        connections={("mac", "1c:69:7a:44:69:70")},
+    )
+    for order in (
+        [bluetooth_a, esphome_a, esphome_b],
+        [esphome_b, esphome_a, bluetooth_a],
+        [bluetooth_a, esphome_b, esphome_a],
+    ):
+        mock_coordinator.dr.async_get_devices = MagicMock(return_value=list(order))
+        scanner = BermudaDevice(address="1C:69:7A:44:69:6E", coordinator=mock_coordinator)
+        scanner._hascanner = mock_remote_scanner
+        scanner.async_as_scanner_resolve_device_entries()
+        assert scanner.address_wifi_mac == "1c:69:7a:44:69:6c", order
+        assert scanner.address_ble_mac == "1c:69:7a:44:69:6e"
+        assert scanner.unique_id == "1c:69:7a:44:69:6c"
+        assert scanner.name_devreg == "ESP32-S3 Bluetooth Proxy 44696c"
+
+
+def _with_domains(mock_coordinator, domains):
+    """Give the mock coordinator a config-entry lookup: entry id -> domain."""
+    from types import SimpleNamespace
+
+    mock_coordinator.hass.config_entries.async_get_entry = MagicMock(
+        side_effect=lambda entry_id: SimpleNamespace(domain=domains[entry_id]) if entry_id in domains else None
+    )
+
+
+def test_scanner_registry_match_prefers_the_scanner_integration_over_a_router_with_the_same_mac(
+    mock_coordinator, mock_remote_scanner
+):
+    """Issue #722: a router integration (TP-Link here) registers the same proxy
+    under the same WiFi MAC, named "linux" and with no area. Both entries are
+    the same distance from the BLE address, so registry order used to decide:
+    router first meant no area (the repair) and the router's name. The
+    ESPHome entry must win whatever the order, and with the core Bluetooth
+    entry present the name must still be ESPHome's, not the router's."""
+    from types import SimpleNamespace
+
+    _with_domains(mock_coordinator, {"e-esp": "esphome", "e-tp": "tplink", "e-bt": "bluetooth"})
+    esphome = SimpleNamespace(
+        id="esp",
+        name="TECHO5 proxy",
+        name_by_user=None,
+        area_id="office",
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-esp"},
+    )
+    router = SimpleNamespace(
+        id="tplink",
+        name="linux",
+        name_by_user=None,
+        area_id=None,
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-tp"},
+    )
+    bluetooth = SimpleNamespace(
+        id="bt",
+        name="Bluetooth proxy",
+        name_by_user=None,
+        area_id="office",
+        connections={("bluetooth", "AA:BB:CC:DD:EE:12")},
+        config_entries={"e-bt"},
+    )
+    for order, entry in (
+        ([esphome, router], "esp"),
+        ([router, esphome], "esp"),
+        ([bluetooth, router, esphome], "bt"),
+        ([router, esphome, bluetooth], "bt"),
+    ):
+        mock_coordinator.dr.async_get_devices = MagicMock(return_value=list(order))
+        scanner = BermudaDevice(address="AA:BB:CC:DD:EE:12", coordinator=mock_coordinator)
+        scanner._hascanner = mock_remote_scanner
+        scanner.async_as_scanner_resolve_device_entries()
+        ids = [d.id for d in order]
+        assert scanner.entry_id == entry, ids
+        assert scanner.area_id == "office", ids
+        assert scanner.name_devreg == "TECHO5 proxy", ids
+        assert scanner.address_wifi_mac == "aa:bb:cc:dd:ee:10", ids
+
+
+def test_scanner_area_comes_from_another_entry_for_the_same_hardware(mock_coordinator, mock_remote_scanner):
+    """The workaround people use for #722 - giving the router's entry an area -
+    keeps working: the scanner's own entry has none, the same MAC's other
+    entry has one, and that area is the scanner's."""
+    from types import SimpleNamespace
+
+    _with_domains(mock_coordinator, {"e-esp": "esphome", "e-tp": "tplink"})
+    esphome = SimpleNamespace(
+        id="esp",
+        name="TECHO5 proxy",
+        name_by_user=None,
+        area_id=None,
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-esp"},
+    )
+    router = SimpleNamespace(
+        id="tplink",
+        name="linux",
+        name_by_user=None,
+        area_id="office",
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-tp"},
+    )
+    neighbour = SimpleNamespace(
+        id="light",
+        name="Hall light",
+        name_by_user=None,
+        area_id="hall",
+        connections={("mac", "aa:bb:cc:dd:ee:14")},
+        config_entries={"e-esp"},
+    )
+    for order in ([esphome, router, neighbour], [neighbour, router, esphome]):
+        mock_coordinator.dr.async_get_devices = MagicMock(return_value=list(order))
+        scanner = BermudaDevice(address="AA:BB:CC:DD:EE:12", coordinator=mock_coordinator)
+        scanner._hascanner = mock_remote_scanner
+        scanner.async_as_scanner_resolve_device_entries()
+        assert scanner.entry_id == "esp" and scanner.name_devreg == "TECHO5 proxy"
+        # The router's area (same MAC), never the neighbour light's (different MAC).
+        assert scanner.area_id == "office", [d.id for d in order]
+
+
+def test_a_re_resolve_replaces_an_earlier_winners_entry_id(mock_coordinator, mock_remote_scanner):
+    """A scanner first resolved to the router's entry (the scanner
+    integration's entry not registered yet), then re-resolved once it is,
+    must carry the new winner's entry_id, not keep the router's."""
+    from types import SimpleNamespace
+
+    _with_domains(mock_coordinator, {"e-esp": "esphome", "e-tp": "tplink"})
+    esphome = SimpleNamespace(
+        id="esp",
+        name="TECHO5 proxy",
+        name_by_user=None,
+        area_id="office",
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-esp"},
+    )
+    router = SimpleNamespace(
+        id="tplink",
+        name="linux",
+        name_by_user=None,
+        area_id=None,
+        connections={("mac", "aa:bb:cc:dd:ee:10")},
+        config_entries={"e-tp"},
+    )
+    scanner = BermudaDevice(address="AA:BB:CC:DD:EE:12", coordinator=mock_coordinator)
+    scanner._hascanner = mock_remote_scanner
+    mock_coordinator.dr.async_get_devices = MagicMock(return_value=[router])
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.entry_id == "tplink"
+    mock_coordinator.dr.async_get_devices = MagicMock(return_value=[router, esphome])
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.entry_id == "esp" and scanner.name_devreg == "TECHO5 proxy" and scanner.area_id == "office"
