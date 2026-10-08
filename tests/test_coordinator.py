@@ -50,7 +50,7 @@ def test_handle_devreg_malformed_identifier():
     assert coordinator._scanner_init_pending is True
 
 
-def test_prune_devices_tolerates_duplicate_prune_entries():
+def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
     """A device listed twice in prune_list must not crash the update cycle.
 
     Regression test: ``prune_list`` is appended to from three independent
@@ -65,7 +65,13 @@ def test_prune_devices_tolerates_duplicate_prune_entries():
     the whole coordinator refresh ("Unexpected error fetching bermuda data").
     Observed in the wild on a 60-proxy install.
     """
-    from bluetooth_data_tools import monotonic_time_coarse
+    import custom_components.bermuda.coordinator as coordinator_module
+
+    # A last_seen of 0 is only stale once the host has been up longer than
+    # the prune timeouts; pin the clock so the test does not depend on how
+    # long the machine (a fresh CI container) has been running.
+    monotonic_time_coarse = lambda: 5000.0  # noqa: E731
+    monkeypatch.setattr(coordinator_module, "monotonic_time_coarse", monotonic_time_coarse)
 
     from custom_components.bermuda.const import BDADDR_TYPE_RANDOM_RESOLVABLE
 
