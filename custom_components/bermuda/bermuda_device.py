@@ -327,7 +327,12 @@ class BermudaDevice:
         get_entry = getattr(getattr(hass, "config_entries", None), "async_get_entry", None)
         if get_entry is None:
             return False
-        for entry_id in getattr(devreg_device, "config_entries", None) or ():
+        # A device belongs to one config entry from Home Assistant 2026.10
+        # (``config_entry_id``); reading ``config_entries`` there is deprecated
+        # (removed in 2027.10), so it is only the fallback for older cores.
+        entry_id = getattr(devreg_device, "config_entry_id", None)
+        entry_ids = (entry_id,) if entry_id else getattr(devreg_device, "config_entries", None) or ()
+        for entry_id in entry_ids:
             entry = get_entry(entry_id)
             if getattr(entry, "domain", None) in SCANNER_DOMAINS:
                 return True
