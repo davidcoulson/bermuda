@@ -423,3 +423,48 @@ def test_refresh_scanners_serves_a_pending_request_once():
 
     assert calls == [True, False, True]
     assert coordinator._scanner_init_pending is False
+
+
+def test_gather_skips_old_adverts_by_the_scanners_stamps():
+    """The per-scanner stamp lookup in _async_gather_advert_data keeps the
+    old behaviour: an advert stamped before the last cycle started is
+    skipped, a fresh one, an unstamped one and a local adaptor's are not."""
+    from types import SimpleNamespace
+
+    def ble(addr):
+        return SimpleNamespace(address=addr), SimpleNamespace(rssi=-60)
+
+    remote = SimpleNamespace(
+        source="AA:AA:AA:AA:AA:01",
+        discovered_devices_and_advertisement_data={
+            k: ble(k) for k in ("11:11:11:11:11:01", "11:11:11:11:11:02", "11:11:11:11:11:03")
+        },
+    )
+    local = SimpleNamespace(
+        source="AA:AA:AA:AA:AA:02",
+        discovered_devices_and_advertisement_data={"11:11:11:11:11:04": ble("11:11:11:11:11:04")},
+    )
+    seen = []
+    scanners = {
+        "aa:aa:aa:aa:aa:01": SimpleNamespace(
+            is_remote_scanner=True,
+            async_as_scanner_update=lambda s: None,
+            stamps={"11:11:11:11:11:01": 50.0, "11:11:11:11:11:02": 99.0},
+        ),
+        "aa:aa:aa:aa:aa:02": SimpleNamespace(
+            is_remote_scanner=False, async_as_scanner_update=lambda s: None, stamps=None
+        ),
+    }
+    coordinator = SimpleNamespace(
+        _refresh_scanners=lambda force=False: None,
+        _hascanners=[remote, local],
+        _get_device=lambda address: scanners.get(address.lower()),
+        stamp_last_update_started=100.0,
+        _get_or_create_device=lambda address: SimpleNamespace(
+            address=address.lower(), process_advertisement=lambda scanner, ad, a=address: seen.append(a)
+        ),
+        findmy_manager=SimpleNamespace(check_mac=lambda address: None),
+    )
+    BermudaDataUpdateCoordinator._async_gather_advert_data(coordinator)
+    # ..:01 is stamped 50 (< 100 - 3): skipped. ..:02 fresh, ..:03 unstamped, ..:04 a local adaptor's.
+    assert seen == ["11:11:11:11:11:02", "11:11:11:11:11:03", "11:11:11:11:11:04"]

@@ -47,6 +47,19 @@ if TYPE_CHECKING:
 # ruff: noqa: PLR1730
 
 
+def advert_is_settled(advert) -> bool:
+    """
+    Whether an advert is away and already cleared, with no new reading.
+
+    Every branch of BermudaAdvert.calculate_data would leave such an advert
+    exactly as it is, so it returns at once - and BermudaDevice.calculate_data
+    does not call it at all (one test, here, for both, so they cannot drift).
+    The history lists need no trim either: they only grow alongside a new
+    stamp, in update_advertisement.
+    """
+    return advert.new_stamp is None and advert.rssi_distance is None and not advert.hist_distance_by_interval
+
+
 class BermudaAdvert:
     """
     Represents details from a scanner relevant to a specific device.
@@ -373,7 +386,7 @@ class BermudaAdvert:
         """
         new_stamp = self.new_stamp  # should have been set by update()
 
-        if new_stamp is None and self.rssi_distance is None and not self.hist_distance_by_interval:
+        if advert_is_settled(self):
             # Already away and already cleared, with nothing new: every branch
             # below would leave this advert exactly as it is. Most adverts are
             # in this state most of the time - on a 58-scanner install 16,500
