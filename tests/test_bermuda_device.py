@@ -359,3 +359,24 @@ def test_a_re_resolve_replaces_an_earlier_winners_entry_id(mock_coordinator, moc
     mock_coordinator.dr.devices.get_entries = MagicMock(return_value=[router, esphome])
     scanner.async_as_scanner_resolve_device_entries()
     assert scanner.entry_id == "esp" and scanner.name_devreg == "TECHO5 proxy" and scanner.area_id == "office"
+
+
+def test_scanner_integration_is_read_from_config_entry_id_on_current_cores(mock_coordinator):
+    """From Home Assistant 2026.10 a device has one ``config_entry_id`` and
+    reading ``config_entries`` is deprecated: use the new attribute, and do
+    not touch the old one when the new one is there."""
+    from types import SimpleNamespace
+
+    class NewCoreDevice:
+        config_entry_id = "e-esp"
+
+        @property
+        def config_entries(self):
+            raise AssertionError("config_entries read on a core that has config_entry_id")
+
+    _with_domains(mock_coordinator, {"e-esp": "esphome", "e-tp": "tplink"})
+    scanner = BermudaDevice(address="AA:BB:CC:DD:EE:12", coordinator=mock_coordinator)
+    assert scanner._from_scanner_integration(NewCoreDevice()) is True
+    # An older core: no config_entry_id, the set of entries is read instead.
+    assert scanner._from_scanner_integration(SimpleNamespace(config_entries={"e-tp"})) is False
+    assert scanner._from_scanner_integration(SimpleNamespace(config_entries={"e-tp", "e-esp"})) is True
