@@ -38,6 +38,8 @@ def test_prune_devices_quota(prunable_count, quota):
         irk_manager=MagicMock(),
     )
 
+    # The fork's prune_devices also sweeps long-silent adverts; wire that in.
+    coordinator._prune_silent_adverts = lambda now: BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
     with (
         patch("custom_components.bermuda.coordinator.monotonic_time_coarse", return_value=1000),
         patch("custom_components.bermuda.coordinator.PRUNE_MAX_COUNT", quota),
