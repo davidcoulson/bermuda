@@ -40,6 +40,7 @@ def test_stale_untracked_ibeacons_are_pruned():
         scanner_list=[],
         _get_device=lambda address: None,
     )
+    coordinator._prune_silent_adverts = lambda now: BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
     BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
     assert set(coordinator.metadevices) == {"bbbb_1_1", "cccc_1_1"}
     assert "aaaa_1_1" not in coordinator.devices
