@@ -134,6 +134,10 @@ async def async_remove_config_entry_device(
         keep = [a for a in tracked if mac_norm(a) != target]
         if len(keep) != len(tracked):
             hass.config_entries.async_update_entry(config_entry, options={**config_entry.options, CONF_DEVICES: keep})
+            # The reload that follows is scheduled, not immediate: update the
+            # live options too (every BermudaDevice shares this dict), or a
+            # cycle in between turns create_sensor straight back on.
+            coordinator.options[CONF_DEVICES] = keep
         return True
     # Even if we don't know this address it probably just means it's stale or from
     # a previous version that used weirder names. Allow it.
