@@ -39,3 +39,16 @@ async def test_removing_an_ibeacon_with_a_legacy_suffix_stops_tracking_it():
     assert await async_remove_config_entry_device(hass, entry, device_entry) is True
     assert device.create_sensor is False
     assert hass.config_entries.async_update_entry.call_args.kwargs["options"][CONF_DEVICES] == []
+
+
+async def test_removal_matches_a_stored_address_with_other_separators():
+    device = SimpleNamespace(address="aa:bb:cc:dd:ee:ff", create_sensor=True)
+    coordinator = SimpleNamespace(devices={"aa:bb:cc:dd:ee:ff": device})
+    entry = SimpleNamespace(
+        runtime_data=SimpleNamespace(coordinator=coordinator),
+        options={CONF_DEVICES: ["AA-BB-CC-DD-EE-FF", "11:22:33:44:55:66"]},
+    )
+    hass = MagicMock()
+    device_entry = SimpleNamespace(identifiers={(DOMAIN, "aa:bb:cc:dd:ee:ff")}, name="Phone")
+    assert await async_remove_config_entry_device(hass, entry, device_entry) is True
+    assert hass.config_entries.async_update_entry.call_args.kwargs["options"][CONF_DEVICES] == ["11:22:33:44:55:66"]

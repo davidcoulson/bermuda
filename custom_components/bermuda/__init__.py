@@ -129,7 +129,9 @@ async def async_remove_config_entry_device(
         # address in CONF_DEVICES, so a removed device has to leave that list
         # too, or its entities come straight back.
         tracked = config_entry.options.get(CONF_DEVICES, [])
-        keep = [a for a in tracked if a.upper() != device.address.upper()]
+        # Compared normalised: a stored address may use "-" or "_" separators.
+        target = mac_norm(device.address)
+        keep = [a for a in tracked if mac_norm(a) != target]
         if len(keep) != len(tracked):
             hass.config_entries.async_update_entry(config_entry, options={**config_entry.options, CONF_DEVICES: keep})
         return True
