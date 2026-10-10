@@ -111,10 +111,16 @@ async def async_remove_config_entry_device(
             # own, so it must be matched whole, not split.
             address = ident
     if address is not None:
-        device = coordinator.devices.get(mac_norm(address))
-        if device is None:
-            # Older versions added per-sensor suffixes ("_range") to the id.
-            device = coordinator.devices.get(mac_norm(address.split("_")[0]))
+        # Older versions added a per-sensor suffix ("_range") to the id. Strip
+        # trailing "_part"s one at a time until something matches, so an
+        # iBeacon's own underscores ("uuid_major_minor_range") survive.
+        device = None
+        candidate = address
+        while device is None:
+            device = coordinator.devices.get(mac_norm(candidate))
+            if "_" not in candidate:
+                break
+            candidate = candidate.rsplit("_", 1)[0]
         if device is None:
             _LOGGER.warning("Failed to locate device entry for %s", address)
             return True
