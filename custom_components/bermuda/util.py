@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from functools import lru_cache
 
 
@@ -125,7 +126,9 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
     if ref_power is None:
         return False
         # ref_power = self.ref_power
-    if attenuation is None:
+    if attenuation is None or not math.isfinite(attenuation) or attenuation <= 0:
+        # Zero would divide by zero (and abort the whole update cycle); a
+        # negative or NaN factor gives nonsense distances.
         return False
         # attenuation= self.attenuation
 
