@@ -72,6 +72,13 @@ if TYPE_CHECKING:
 # from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 
+# Path-loss exponent: rssi_to_metres divides by it, so zero (or NaN) would
+# abort every update cycle. Real-world values sit around 2-4.
+ATTENUATION_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10))
+# RSSI expected at 1 m, in dBm. vol.Range also rejects NaN.
+REF_POWER_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=-127, max=10))
+
+
 class BermudaFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
     """Config flow for bermuda."""
 
@@ -243,11 +250,11 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             vol.Required(
                 CONF_ATTENUATION,
                 default=self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION),
-            ): vol.Coerce(float),
+            ): ATTENUATION_SCHEMA,
             vol.Required(
                 CONF_REF_POWER,
                 default=self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER),
-            ): vol.Coerce(float),
+            ): REF_POWER_SCHEMA,
             vol.Required(
                 CONF_CREATE_SCANNER_ENTITIES,
                 default=self.options.get(CONF_CREATE_SCANNER_ENTITIES, DEFAULT_CREATE_SCANNER_ENTITIES),
@@ -449,13 +456,13 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 default=self._last_ref_power
                 if self._last_ref_power is not None
                 else self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER),
-            ): vol.Coerce(float),
+            ): REF_POWER_SCHEMA,
             vol.Required(
                 CONF_ATTENUATION,
                 default=self._last_attenuation
                 if self._last_attenuation is not None
                 else self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION),
-            ): vol.Coerce(float),
+            ): ATTENUATION_SCHEMA,
             vol.Optional(CONF_SAVE_AND_CLOSE, default=False): vol.Coerce(bool),
         }
         if user_input is None:
