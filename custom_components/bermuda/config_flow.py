@@ -70,24 +70,46 @@ ATTENUATION_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10))
 # RSSI expected at 1 m, in dBm. vol.Range also rejects NaN.
 REF_POWER_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=-127, max=10))
 ATTENUATION_RANGE = (0.1, 10.0)
+
+
+def _attenuation_usable(value: float) -> bool:
+    """An attenuation rssi_to_metres uses as it is (it replaces 0 and below)."""
+    return value > 0
+
+
 REF_POWER_RANGE = (-127.0, 10.0)
 
 
-def _form_default(value, default, bounds):
+def _form_default(value, default, bounds, usable=lambda _v: True):
     """
-    Return a stored value as the form's default, pulled inside its bounds.
+    Return a stored value as the form's default, so the form saves as shown.
 
-    The default stands in when it is not a usable number, so an option saved
-    before the bounds existed (an attenuation of 0) cannot make the form refuse
-    to save until someone spots which field is wrong.
+    A value the distance maths cannot use (see rssi_to_metres: an attenuation
+    of 0 or below, anything that is not a finite number) is shown as the
+    default, which is what that maths falls back to, so saving the form
+    unchanged keeps the distances as they are. A usable value outside the
+    form's bounds (saved before the bounds existed) is pulled to the nearest
+    bound.
     """
     try:
         number = float(value)
     except (TypeError, ValueError):
         return default
-    if not math.isfinite(number):
+    if not math.isfinite(number) or not usable(number):
         return default
     return min(max(number, bounds[0]), bounds[1])
+
+
+def _attenuation_default(options) -> float:
+    """The stored attenuation as the forms show it (see _form_default)."""
+    return _form_default(
+        options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE, _attenuation_usable
+    )
+
+
+def _ref_power_default(options) -> float:
+    """The stored ref_power as the forms show it (see _form_default)."""
+    return _form_default(options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE)
 
 
 class BermudaFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -250,15 +272,11 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             ): vol.Coerce(int),
             vol.Required(
                 CONF_ATTENUATION,
-                default=_form_default(
-                    self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE
-                ),
+                default=_attenuation_default(self.options),
             ): ATTENUATION_SCHEMA,
             vol.Required(
                 CONF_REF_POWER,
-                default=_form_default(
-                    self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE
-                ),
+                default=_ref_power_default(self.options),
             ): REF_POWER_SCHEMA,
         }
 
@@ -423,19 +441,13 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             ),
             vol.Required(
                 CONF_REF_POWER,
-                default=self._last_ref_power
-                if self._last_ref_power is not None
-                else _form_default(
-                    self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE
-                ),
+                default=self._last_ref_power if self._last_ref_power is not None else _ref_power_default(self.options),
             ): REF_POWER_SCHEMA,
             vol.Required(
                 CONF_ATTENUATION,
                 default=self._last_attenuation
                 if self._last_attenuation is not None
-                else _form_default(
-                    self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE
-                ),
+                else _attenuation_default(self.options),
             ): ATTENUATION_SCHEMA,
             vol.Optional(CONF_SAVE_AND_CLOSE, default=False): vol.Coerce(bool),
         }
