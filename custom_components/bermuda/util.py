@@ -105,24 +105,35 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
     # election, the calibration tables), so this always returns one. A
     # sentinel would be read as a number - False is 0 m, the nearest scanner
     # there is - and None breaks the velocity arithmetic.
-    if not _usable(ref_power):
+    if not usable_number(ref_power):
         # Missing or NaN (an option saved before the forms checked it): the
         # default, rather than a NaN distance in every history.
         ref_power = DEFAULT_REF_POWER
-    if not _usable(attenuation) or attenuation <= 0:
+    if not usable_number(attenuation) or attenuation <= 0:
         # Zero would divide by zero (and abort the whole update cycle); a
         # negative or NaN factor gives nonsense distances.
         attenuation = DEFAULT_ATTENUATION
-    if not _usable(rssi):
+    if not usable_number(rssi):
         # No signal to go on: as far as Bermuda ever reports.
         return DISTANCE_INFINITE
 
     return 10 ** ((ref_power - rssi) / (10 * attenuation))
 
 
-def _usable(value) -> bool:
-    """A finite number (not a bool)."""
-    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+def usable_number(value) -> bool:
+    """
+    Whether ``value`` is a finite number rssi_to_metres can use as it is.
+
+    Not a bool, not a numeric string, and not an int too large for a float
+    (math.isfinite raises OverflowError on one). Shared with the options forms,
+    so a form shows a stored value the way the distance maths reads it.
+    """
+    if not isinstance(value, int | float) or isinstance(value, bool):
+        return False
+    try:
+        return math.isfinite(value)
+    except OverflowError:
+        return False
 
 
 @lru_cache(256)
