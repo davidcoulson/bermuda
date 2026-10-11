@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
@@ -77,6 +78,25 @@ if TYPE_CHECKING:
 ATTENUATION_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10))
 # RSSI expected at 1 m, in dBm. vol.Range also rejects NaN.
 REF_POWER_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=-127, max=10))
+ATTENUATION_RANGE = (0.1, 10.0)
+REF_POWER_RANGE = (-127.0, 10.0)
+
+
+def _form_default(value, default, bounds):
+    """
+    Return a stored value as the form's default, pulled inside its bounds.
+
+    The default stands in when it is not a usable number, so an option saved
+    before the bounds existed (an attenuation of 0) cannot make the form refuse
+    to save until someone spots which field is wrong.
+    """
+    try:
+        number = float(value)
+    except (TypeError, ValueError):
+        return default
+    if not math.isfinite(number):
+        return default
+    return min(max(number, bounds[0]), bounds[1])
 
 
 class BermudaFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):
@@ -249,11 +269,15 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             ): vol.Coerce(int),
             vol.Required(
                 CONF_ATTENUATION,
-                default=self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION),
+                default=_form_default(
+                    self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE
+                ),
             ): ATTENUATION_SCHEMA,
             vol.Required(
                 CONF_REF_POWER,
-                default=self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER),
+                default=_form_default(
+                    self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE
+                ),
             ): REF_POWER_SCHEMA,
             vol.Required(
                 CONF_CREATE_SCANNER_ENTITIES,
@@ -455,13 +479,17 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
                 CONF_REF_POWER,
                 default=self._last_ref_power
                 if self._last_ref_power is not None
-                else self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER),
+                else _form_default(
+                    self.options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE
+                ),
             ): REF_POWER_SCHEMA,
             vol.Required(
                 CONF_ATTENUATION,
                 default=self._last_attenuation
                 if self._last_attenuation is not None
-                else self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION),
+                else _form_default(
+                    self.options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE
+                ),
             ): ATTENUATION_SCHEMA,
             vol.Optional(CONF_SAVE_AND_CLOSE, default=False): vol.Coerce(bool),
         }

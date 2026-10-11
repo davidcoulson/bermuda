@@ -123,7 +123,9 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
                     be affected by both receiver sensitivity and transmitter
                     calibration, antenna design and orientation etc.
     """
-    if ref_power is None:
+    if ref_power is None or not math.isfinite(ref_power) or not math.isfinite(rssi):
+        # NaN in either would come out as a NaN distance, carried into the
+        # advert history and the sensors.
         return False
         # ref_power = self.ref_power
     if attenuation is None or not math.isfinite(attenuation) or attenuation <= 0:
