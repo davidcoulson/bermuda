@@ -49,12 +49,22 @@ def test_rssi_to_metres_puts_an_unusable_rssi_far_away():
 
 @pytest.mark.parametrize(
     ("stored", "expected"),
-    [(0, 0.1), (-2, 0.1), (50, 10.0), (math.nan, 3.0), ("bad", 3.0), (None, 3.0), (2.5, 2.5)],
+    [(0, 3.0), (-2, 3.0), (0.05, 0.1), (50, 10.0), (math.nan, 3.0), ("bad", 3.0), (None, 3.0), (2.5, 2.5)],
 )
 def test_a_stored_attenuation_outside_the_bounds_is_pulled_in_for_the_form(stored, expected):
-    from custom_components.bermuda.config_flow import ATTENUATION_RANGE, _form_default
+    from custom_components.bermuda.config_flow import ATTENUATION_RANGE, _attenuation_usable, _form_default
 
-    value = _form_default(stored, 3.0, ATTENUATION_RANGE)
+    value = _form_default(stored, 3.0, ATTENUATION_RANGE, _attenuation_usable)
     assert value == expected
     # And the form then accepts it as it stands.
     assert ATTENUATION_SCHEMA(value) == expected
+
+
+@pytest.mark.parametrize("stored", [0, -2, math.nan])
+def test_saving_the_form_as_shown_keeps_the_distances(stored):
+    """An unusable attenuation runs as the default; the form must show (and so
+    save) that same default, not a clamped 0.1 that turns 1.5 m into 100 km."""
+    from custom_components.bermuda.config_flow import ATTENUATION_RANGE, _attenuation_usable, _form_default
+
+    shown = _form_default(stored, DEFAULT_ATTENUATION, ATTENUATION_RANGE, _attenuation_usable)
+    assert util.rssi_to_metres(-60, -55, ATTENUATION_SCHEMA(shown)) == util.rssi_to_metres(-60, -55, stored)
