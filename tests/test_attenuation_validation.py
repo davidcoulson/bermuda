@@ -88,11 +88,11 @@ def test_rssi_to_metres_never_raises_on_an_extreme_attenuation():
 
 def test_a_bool_and_a_number_are_not_one_cache_entry():
     """The cache must not let a cached 1.0 answer for a stray True (or the reverse)."""
-    util.rssi_to_metres.cache_clear()
+    util._distance.cache_clear()
     numeric = util.rssi_to_metres(-60, -55, 1.0)
     as_bool = util.rssi_to_metres(-60, -55, True)
     assert as_bool == util.rssi_to_metres(-60, -55, DEFAULT_ATTENUATION) != numeric
-    util.rssi_to_metres.cache_clear()
+    util._distance.cache_clear()
     assert util.rssi_to_metres(-60, -55, True) == as_bool
     assert util.rssi_to_metres(-60, -55, 1.0) == numeric
 
@@ -100,3 +100,10 @@ def test_a_bool_and_a_number_are_not_one_cache_entry():
 def test_rssi_to_metres_always_returns_a_float():
     for args in [(-60, -55, 3), (math.nan, -55, 3), (-60, None, None), (-90, -55, 0.001)]:
         assert isinstance(util.rssi_to_metres(*args), float), args
+
+
+@pytest.mark.parametrize("bad", [[3], {"a": 1}, (3,)])
+def test_an_unhashable_stored_option_still_gives_a_distance(bad):
+    """A list in the options must not make the cache raise."""
+    assert util.rssi_to_metres(-60, bad, bad) == util.rssi_to_metres(-60, DEFAULT_REF_POWER, DEFAULT_ATTENUATION)
+    assert util.rssi_to_metres(bad, -55, 3.0) == DISTANCE_INFINITE

@@ -87,10 +87,7 @@ def mac_redact(mac: str, tag: str | None = None) -> str:
     return f"{mac[:2]}::{tag}::{mac[-2:]}"
 
 
-# typed: True and 1.0 are equal keys to an untyped cache, but usable_number()
-# treats them differently, so a cached 1.0 would answer for a stray bool.
-@lru_cache(1024, typed=True)
-def rssi_to_metres(rssi, ref_power=None, attenuation=None):
+def rssi_to_metres(rssi, ref_power=None, attenuation=None) -> float:
     """
     Convert instant rssi value to a distance in metres.
 
@@ -106,7 +103,10 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
     # Every caller stores the result as a distance (its history, the area
     # election, the calibration tables), so this always returns one. A
     # sentinel would be read as a number - False is 0 m, the nearest scanner
-    # there is - and None breaks the velocity arithmetic.
+    # there is - and None breaks the velocity arithmetic. The inputs are
+    # checked here, before the cache: an unhashable stored option (a list)
+    # would make the cache itself raise, and the cache would key True and 1.0
+    # together although they are read differently.
     if not usable_number(ref_power):
         # Missing or NaN (an option saved before the forms checked it): the
         # default, rather than a NaN distance in every history.
@@ -118,11 +118,16 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
     if not usable_number(rssi):
         # No signal to go on: as far as Bermuda ever reports.
         return float(DISTANCE_INFINITE)
+    return _distance(float(rssi), float(ref_power), float(attenuation))
 
+
+@lru_cache(1024)
+def _distance(rssi: float, ref_power: float, attenuation: float) -> float:
+    """rssi_to_metres for checked, finite floats (attenuation above 0)."""
     try:
         distance = 10 ** ((ref_power - rssi) / (10 * attenuation))
     except OverflowError:
-        # A tiny attenuation (0.001, saved before the forms had bounds) can
+        # A tiny attenuation (0.001, saved before the forms checked it) can
         # push the power past a float on a weak signal.
         return float(DISTANCE_INFINITE)
     return distance if math.isfinite(distance) else float(DISTANCE_INFINITE)
