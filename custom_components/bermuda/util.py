@@ -87,7 +87,9 @@ def mac_redact(mac: str, tag: str | None = None) -> str:
     return f"{mac[:2]}::{tag}::{mac[-2:]}"
 
 
-@lru_cache(1024)
+# typed: True and 1.0 are equal keys to an untyped cache, but usable_number()
+# treats them differently, so a cached 1.0 would answer for a stray bool.
+@lru_cache(1024, typed=True)
 def rssi_to_metres(rssi, ref_power=None, attenuation=None):
     """
     Convert instant rssi value to a distance in metres.
@@ -115,9 +117,15 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
         attenuation = DEFAULT_ATTENUATION
     if not usable_number(rssi):
         # No signal to go on: as far as Bermuda ever reports.
-        return DISTANCE_INFINITE
+        return float(DISTANCE_INFINITE)
 
-    return 10 ** ((ref_power - rssi) / (10 * attenuation))
+    try:
+        distance = 10 ** ((ref_power - rssi) / (10 * attenuation))
+    except OverflowError:
+        # A tiny attenuation (0.001, saved before the forms had bounds) can
+        # push the power past a float on a weak signal.
+        return float(DISTANCE_INFINITE)
+    return distance if math.isfinite(distance) else float(DISTANCE_INFINITE)
 
 
 def usable_number(value) -> bool:

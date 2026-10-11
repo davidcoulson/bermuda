@@ -76,3 +76,24 @@ def test_saving_ref_power_as_shown_keeps_the_distances(stored):
 
     shown = _ref_power_default({"ref_power": stored})
     assert util.rssi_to_metres(-60, REF_POWER_SCHEMA(shown), 3.0) == util.rssi_to_metres(-60, stored, 3.0)
+
+
+def test_rssi_to_metres_never_raises_on_an_extreme_attenuation():
+    got = util.rssi_to_metres(-90, -55, 0.001)
+    assert isinstance(got, float) and got == DISTANCE_INFINITE
+
+
+def test_a_bool_and_a_number_are_not_one_cache_entry():
+    """The cache must not let a cached 1.0 answer for a stray True (or the reverse)."""
+    util.rssi_to_metres.cache_clear()
+    numeric = util.rssi_to_metres(-60, -55, 1.0)
+    as_bool = util.rssi_to_metres(-60, -55, True)
+    assert as_bool == util.rssi_to_metres(-60, -55, DEFAULT_ATTENUATION) != numeric
+    util.rssi_to_metres.cache_clear()
+    assert util.rssi_to_metres(-60, -55, True) == as_bool
+    assert util.rssi_to_metres(-60, -55, 1.0) == numeric
+
+
+def test_rssi_to_metres_always_returns_a_float():
+    for args in [(-60, -55, 3), (math.nan, -55, 3), (-60, None, None), (-90, -55, 0.001)]:
+        assert isinstance(util.rssi_to_metres(*args), float), args
