@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import math
 from typing import TYPE_CHECKING
 
 import voluptuous as vol
@@ -58,7 +57,7 @@ from .const import (
     DOMAIN_PRIVATE_BLE_DEVICE,
     NAME,
 )
-from .util import mac_redact, rssi_to_metres
+from .util import mac_redact, rssi_to_metres, usable_number
 
 if TYPE_CHECKING:
     from homeassistant.components.bluetooth import BluetoothServiceInfoBleak
@@ -100,13 +99,11 @@ def _form_default(value, default, bounds, usable=lambda _v: True):
     form's bounds (saved before the bounds existed) is pulled to the nearest
     bound.
     """
-    try:
-        number = float(value)
-    except (TypeError, ValueError):
+    # The same test the maths applies (a numeric string, a bool or an int too
+    # big for a float is not used as it stands there either), then the field's own.
+    if not usable_number(value) or not usable(value):
         return default
-    if not math.isfinite(number) or not usable(number):
-        return default
-    return min(max(number, bounds[0]), bounds[1])
+    return min(max(float(value), bounds[0]), bounds[1])
 
 
 def _attenuation_default(options) -> float:
