@@ -72,12 +72,20 @@ if TYPE_CHECKING:
 # from homeassistant.helpers.aiohttp_client import async_create_clientsession
 
 
-# Path-loss exponent: rssi_to_metres divides by it, so zero (or NaN) would
-# abort every update cycle. Real-world values sit around 2-4.
-ATTENUATION_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=0.1, max=10))
-# RSSI expected at 1 m, in dBm. vol.Range also rejects NaN.
-REF_POWER_SCHEMA = vol.All(vol.Coerce(float), vol.Range(min=-127, max=10))
-ATTENUATION_RANGE = (0.1, 10.0)
+def _finite(value: float) -> float:
+    """Reject NaN and infinities (vol.Coerce(float) accepts "nan" and "inf")."""
+    if not usable_number(value):
+        msg = "must be a finite number"
+        raise vol.Invalid(msg)
+    return value
+
+
+# Path-loss exponent: rssi_to_metres divides by it, so zero (or NaN) aborted
+# every update cycle. Any positive finite value works; real-world ones sit
+# around 2-4. No upper bound: a value that works today must still save.
+ATTENUATION_SCHEMA = vol.All(vol.Coerce(float), _finite, vol.Range(min=0, min_included=False))
+# RSSI expected at 1 m, in dBm: any finite value.
+REF_POWER_SCHEMA = vol.All(vol.Coerce(float), _finite)
 
 
 def _attenuation_usable(value: float) -> bool:
@@ -85,37 +93,28 @@ def _attenuation_usable(value: float) -> bool:
     return value > 0
 
 
-REF_POWER_RANGE = (-127.0, 10.0)
-
-
-def _form_default(value, default, bounds, usable=lambda _v: True):
+def _form_default(value, default, usable=lambda _v: True):
     """
     Return a stored value as the form's default, so the form saves as shown.
 
-    A value the distance maths cannot use (see rssi_to_metres: an attenuation
-    of 0 or below, anything that is not a finite number) is shown as the
-    default, which is what that maths falls back to, so saving the form
-    unchanged keeps the distances as they are. A usable value outside the
-    form's bounds (saved before the bounds existed) is pulled to the nearest
-    bound.
+    The form shows exactly what the distance maths uses: the stored value when
+    rssi_to_metres takes it as it is, else the default it falls back to (an
+    attenuation of 0 or below, a NaN, a numeric string, a bool). Saving the
+    form unchanged then keeps every distance as it was.
     """
-    # The same test the maths applies (a numeric string, a bool or an int too
-    # big for a float is not used as it stands there either), then the field's own.
     if not usable_number(value) or not usable(value):
         return default
-    return min(max(float(value), bounds[0]), bounds[1])
+    return float(value)
 
 
 def _attenuation_default(options) -> float:
     """The stored attenuation as the forms show it (see _form_default)."""
-    return _form_default(
-        options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, ATTENUATION_RANGE, _attenuation_usable
-    )
+    return _form_default(options.get(CONF_ATTENUATION, DEFAULT_ATTENUATION), DEFAULT_ATTENUATION, _attenuation_usable)
 
 
 def _ref_power_default(options) -> float:
     """The stored ref_power as the forms show it (see _form_default)."""
-    return _form_default(options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER, REF_POWER_RANGE)
+    return _form_default(options.get(CONF_REF_POWER, DEFAULT_REF_POWER), DEFAULT_REF_POWER)
 
 
 class BermudaFlowHandler(config_entries.ConfigFlow, domain=DOMAIN):

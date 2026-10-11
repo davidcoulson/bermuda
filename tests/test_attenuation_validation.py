@@ -22,7 +22,7 @@ def test_rssi_to_metres_uses_the_default_for_an_unusable_attenuation(attenuation
     assert got is not False and math.isfinite(got) and got > 0
 
 
-@pytest.mark.parametrize("value", [0, -2, math.nan, "nan", 50])
+@pytest.mark.parametrize("value", [0, -2, math.nan, "nan", math.inf, "inf"])
 def test_attenuation_schema_rejects_bad_values(value):
     with pytest.raises(vol.Invalid):
         ATTENUATION_SCHEMA(value)
@@ -30,9 +30,12 @@ def test_attenuation_schema_rejects_bad_values(value):
 
 def test_attenuation_and_ref_power_schemas_accept_normal_values():
     assert ATTENUATION_SCHEMA("3") == 3.0
+    assert ATTENUATION_SCHEMA(50) == 50.0  # unusual, but it works: it must still save
     assert REF_POWER_SCHEMA(-55) == -55.0
-    with pytest.raises(vol.Invalid):
-        REF_POWER_SCHEMA(math.nan)
+    assert REF_POWER_SCHEMA(-130) == -130.0
+    for bad in (math.nan, "inf", -math.inf):
+        with pytest.raises(vol.Invalid):
+            REF_POWER_SCHEMA(bad)
 
 
 @pytest.mark.parametrize("ref_power", [math.nan, math.inf, -math.inf, None])
@@ -49,28 +52,28 @@ def test_rssi_to_metres_puts_an_unusable_rssi_far_away():
 
 @pytest.mark.parametrize(
     ("stored", "expected"),
-    [(0, 3.0), (-2, 3.0), (0.05, 0.1), (50, 10.0), (math.nan, 3.0), ("bad", 3.0), (None, 3.0), (2.5, 2.5)],
+    [(0, 3.0), (-2, 3.0), (0.05, 0.05), (50, 50.0), (math.nan, 3.0), ("bad", 3.0), (None, 3.0), (2.5, 2.5)],
 )
-def test_a_stored_attenuation_outside_the_bounds_is_pulled_in_for_the_form(stored, expected):
-    from custom_components.bermuda.config_flow import ATTENUATION_RANGE, _attenuation_usable, _form_default
+def test_the_form_shows_a_stored_attenuation_as_the_maths_uses_it(stored, expected):
+    from custom_components.bermuda.config_flow import _attenuation_default
 
-    value = _form_default(stored, 3.0, ATTENUATION_RANGE, _attenuation_usable)
+    value = _attenuation_default({"attenuation": stored})
     assert value == expected
     # And the form then accepts it as it stands.
     assert ATTENUATION_SCHEMA(value) == expected
 
 
-@pytest.mark.parametrize("stored", [0, -2, math.nan, "2.5", True, 10**400])
+@pytest.mark.parametrize("stored", [0, -2, math.nan, "2.5", True, 10**400, 0.05, 50])
 def test_saving_the_form_as_shown_keeps_the_distances(stored):
-    """An unusable attenuation runs as the default; the form must show (and so
-    save) that same default, not a clamped 0.1 that turns 1.5 m into 100 km."""
-    from custom_components.bermuda.config_flow import ATTENUATION_RANGE, _attenuation_usable, _form_default
+    """Whatever is stored, the form shows (and so saves) what the maths uses:
+    saving it unchanged must not move a single distance."""
+    from custom_components.bermuda.config_flow import _attenuation_default
 
-    shown = _form_default(stored, DEFAULT_ATTENUATION, ATTENUATION_RANGE, _attenuation_usable)
+    shown = _attenuation_default({"attenuation": stored})
     assert util.rssi_to_metres(-60, -55, ATTENUATION_SCHEMA(shown)) == util.rssi_to_metres(-60, -55, stored)
 
 
-@pytest.mark.parametrize("stored", [math.nan, "-60", False, -(10**400)])
+@pytest.mark.parametrize("stored", [math.nan, "-60", False, -(10**400), -130, 20])
 def test_saving_ref_power_as_shown_keeps_the_distances(stored):
     from custom_components.bermuda.config_flow import _ref_power_default
 
