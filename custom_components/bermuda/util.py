@@ -5,6 +5,8 @@ from __future__ import annotations
 import math
 from functools import lru_cache
 
+from .const import DEFAULT_ATTENUATION, DEFAULT_REF_POWER, DISTANCE_INFINITE
+
 
 @lru_cache(64)
 def mac_math_offset(mac, offset=0) -> str | None:
@@ -99,18 +101,28 @@ def rssi_to_metres(rssi, ref_power=None, attenuation=None):
                     be affected by both receiver sensitivity and transmitter
                     calibration, antenna design and orientation etc.
     """
-    if ref_power is None or not math.isfinite(ref_power) or not math.isfinite(rssi):
-        # NaN in either would come out as a NaN distance, carried into the
-        # advert history and the sensors.
-        return False
-        # ref_power = self.ref_power
-    if attenuation is None or not math.isfinite(attenuation) or attenuation <= 0:
+    # Every caller stores the result as a distance (its history, the area
+    # election, the calibration tables), so this always returns one. A
+    # sentinel would be read as a number - False is 0 m, the nearest scanner
+    # there is - and None breaks the velocity arithmetic.
+    if not _usable(ref_power):
+        # Missing or NaN (an option saved before the forms checked it): the
+        # default, rather than a NaN distance in every history.
+        ref_power = DEFAULT_REF_POWER
+    if not _usable(attenuation) or attenuation <= 0:
         # Zero would divide by zero (and abort the whole update cycle); a
         # negative or NaN factor gives nonsense distances.
-        return False
-        # attenuation= self.attenuation
+        attenuation = DEFAULT_ATTENUATION
+    if not _usable(rssi):
+        # No signal to go on: as far as Bermuda ever reports.
+        return DISTANCE_INFINITE
 
     return 10 ** ((ref_power - rssi) / (10 * attenuation))
+
+
+def _usable(value) -> bool:
+    """A finite number (not a bool)."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
 
 
 @lru_cache(256)

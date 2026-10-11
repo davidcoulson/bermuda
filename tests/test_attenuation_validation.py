@@ -9,12 +9,17 @@ import voluptuous as vol
 
 from custom_components.bermuda import util
 from custom_components.bermuda.config_flow import ATTENUATION_SCHEMA, REF_POWER_SCHEMA
+from custom_components.bermuda.const import DEFAULT_ATTENUATION, DEFAULT_REF_POWER, DISTANCE_INFINITE
 
 
-@pytest.mark.parametrize("attenuation", [0, 0.0, -1.0, math.nan, math.inf])
-def test_rssi_to_metres_rejects_unusable_attenuation(attenuation):
-    """Zero used to raise ZeroDivisionError and abort the update cycle."""
-    assert util.rssi_to_metres(-60, -55, attenuation) is False
+@pytest.mark.parametrize("attenuation", [0, 0.0, -1.0, math.nan, math.inf, None])
+def test_rssi_to_metres_uses_the_default_for_an_unusable_attenuation(attenuation):
+    """Zero used to raise ZeroDivisionError and abort the update cycle. The
+    result must still be a real distance: callers store it in histories and
+    the area election, where a False would be read as 0 m."""
+    got = util.rssi_to_metres(-60, -55, attenuation)
+    assert got == util.rssi_to_metres(-60, -55, DEFAULT_ATTENUATION)
+    assert got is not False and math.isfinite(got) and got > 0
 
 
 @pytest.mark.parametrize("value", [0, -2, math.nan, "nan", 50])
@@ -30,13 +35,16 @@ def test_attenuation_and_ref_power_schemas_accept_normal_values():
         REF_POWER_SCHEMA(math.nan)
 
 
-@pytest.mark.parametrize("ref_power", [math.nan, math.inf, -math.inf])
-def test_rssi_to_metres_rejects_unusable_ref_power(ref_power):
-    assert util.rssi_to_metres(-60, ref_power, 3.0) is False
+@pytest.mark.parametrize("ref_power", [math.nan, math.inf, -math.inf, None])
+def test_rssi_to_metres_uses_the_default_for_an_unusable_ref_power(ref_power):
+    got = util.rssi_to_metres(-60, ref_power, 3.0)
+    assert got == util.rssi_to_metres(-60, DEFAULT_REF_POWER, 3.0)
+    assert got is not False and math.isfinite(got)
 
 
-def test_rssi_to_metres_rejects_unusable_rssi():
-    assert util.rssi_to_metres(math.nan, -55, 3.0) is False
+def test_rssi_to_metres_puts_an_unusable_rssi_far_away():
+    """Never 0 m (which would win the area election) and never NaN."""
+    assert util.rssi_to_metres(math.nan, -55, 3.0) == DISTANCE_INFINITE
 
 
 @pytest.mark.parametrize(
