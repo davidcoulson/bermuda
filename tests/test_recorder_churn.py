@@ -7,7 +7,12 @@ from types import SimpleNamespace
 import pytest
 
 from custom_components.bermuda import sensor as sensor_module
-from custom_components.bermuda.sensor import BermudaSensor, BermudaSensorRange, distance_deadband
+from custom_components.bermuda.sensor import (
+    BermudaSensor,
+    BermudaSensorRange,
+    distance_deadband,
+    distance_fast_fall,
+)
 
 NOW = 10_000.0
 
@@ -49,13 +54,17 @@ def test_jitter_inside_the_deadband_is_held_even_after_the_cache_interval(_clock
     assert _publish(entity, 2.0, NOW) == 2.0
     _clock["now"] = NOW + 60  # long past the 10 s cache
     assert _publish(entity, 2.1, NOW + 60) == 2.0  # 0.1 m < max(0.2, 10%)
-    assert _publish(entity, 1.9, NOW + 60) == 2.0  # a small drop too
-    assert _publish(entity, 2.5, NOW + 60) == 2.5  # a real move is published
+    _clock["now"] = NOW + 120
+    assert _publish(entity, 1.9, NOW + 120) == 2.0  # a small drop too
+    _clock["now"] = NOW + 180
+    assert _publish(entity, 2.5, NOW + 180) == 2.5  # a real move is published
 
 
 def test_the_deadband_grows_with_distance():
     assert distance_deadband(1.0) == pytest.approx(0.2)
     assert distance_deadband(6.0) == pytest.approx(0.6)
+    assert distance_fast_fall(2.0) == pytest.approx(1.0)
+    assert distance_fast_fall(8.0) == pytest.approx(2.0)
 
 
 def test_a_ref_power_change_is_shown_at_once(_clock):
@@ -123,3 +132,65 @@ def test_a_move_just_inside_the_deadband_is_still_held(_clock):
     _clock["now"] = NOW + 60
     assert _publish(entity, 5.5, NOW + 60) == 6.0
     assert _publish(entity, 6.5, NOW + 60) == 6.0
+
+
+def test_readings_scattered_past_the_deadband_are_held(_clock):
+    """Every reading is outside the deadband, one way or the other, but the
+    median of the last interval's readings is not: nothing is published."""
+    entity = _range_sensor(3.0)
+    assert _publish(entity, 3.0, NOW) == 3.0
+    for second in range(1, 60):
+        _clock["now"] = NOW + second
+        assert _publish(entity, (2.6, 3.0, 3.4)[second % 3], NOW + second) == 3.0
+
+
+def test_a_stray_reading_at_the_check_does_not_hold_back_a_move(_clock):
+    """A sustained move with one in-band reading when the interval comes up
+    is published then, not held for as long as the strays keep landing."""
+    entity = _range_sensor(3.0)
+    assert _publish(entity, 3.0, NOW) == 3.0
+    for second in range(1, 11):
+        _clock["now"] = NOW + second
+        _publish(entity, 3.6, NOW + second)
+    _clock["now"] = NOW + 11
+    assert _publish(entity, 3.1, NOW + 11) == 3.6
+
+
+@pytest.mark.parametrize("moved_to", [3.6, 2.4])
+def test_a_move_after_mid_interval_shows_within_an_interval(_clock, moved_to):
+    """A move that starts after the middle of an interval loses that
+    interval's median; it must not then wait out another whole interval."""
+    entity = _range_sensor(3.0)
+    assert _publish(entity, 3.0, NOW) == 3.0
+    published = {}
+    for second in range(1, 30):
+        _clock["now"] = NOW + second
+        published[second] = _publish(entity, 3.0 if second < 7 else moved_to, NOW + second)
+    assert all(published[s] == 3.0 for s in range(1, 7))
+    assert published[17] == moved_to  # within one 10 s interval of the move at 7 s
+    assert published[29] == moved_to
+
+
+def test_at_most_one_new_value_per_interval(_clock):
+    entity = _range_sensor(3.0)
+    assert _publish(entity, 3.0, NOW) == 3.0
+    values = []
+    for second in range(1, 41):
+        _clock["now"] = NOW + second
+        values.append(_publish(entity, 3.0 + 0.1 * second, NOW + second))  # a steady walk away
+    changes = [i for i in range(1, len(values)) if values[i] != values[i - 1]]
+    assert changes and all(b - a > 10 for a, b in zip(changes, changes[1:], strict=False))
+
+
+def test_a_large_drop_is_shown_at_once(_clock):
+    entity = _range_sensor(3.0)
+    assert _publish(entity, 3.0, NOW) == 3.0
+    _clock["now"] = NOW + 1
+    assert _publish(entity, 2.5, NOW + 1) == 3.0  # a small drop waits for the interval
+    assert _publish(entity, 2.0, NOW + 1) == 2.0  # 1 m: at once
+    _clock["now"] = NOW + 2
+    assert _publish(entity, 6.0, NOW + 2) == 2.0  # a rise waits
+    entity = _range_sensor(8.0)
+    assert _publish(entity, 8.0, NOW) == 8.0
+    assert _publish(entity, 6.5, NOW) == 8.0  # 1.5 m < 25 % of 8 m
+    assert _publish(entity, 6.0, NOW) == 6.0  # 25 %: at once
