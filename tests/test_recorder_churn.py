@@ -69,6 +69,7 @@ def _attrs(name):
     device = SimpleNamespace(
         address="aa:bb:cc:dd:ee:ff",
         address_type="public",
+        metadevice_type=set(),
         adverts={},
         area_id="kitchen",
         area_name="Kitchen",
