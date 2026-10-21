@@ -233,42 +233,45 @@ class BermudaSensor(BermudaEntity, SensorEntity):
 
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
-        """Provide state_attributes for the sensor entity."""
+        """
+        Provide state_attributes for the sensor entity.
+
+        Only the Area and Floor sensors carry any. An attribute that changes
+        while the state does not still writes a recorder row, so current_mac
+        (a new one at every rotation of a random address, and on every
+        source change of a metadevice) riding on every sensor of a device
+        had the Nearest Scanner sensor rewritten every 46 s with a state
+        unchanged for four minutes. It lives on the Area sensor only; the
+        Floor sensor keeps just the floor, as the area attributes change on
+        every area switch (about half of all Floor rows were attribute-only).
+        """
+        if self.name == "Floor":
+            return {
+                "floor_id": self._device.floor_id,
+                "floor_name": self._device.floor_name,
+                "floor_level": self._device.floor_level,
+            }
+        if self.name != "Area":
+            return None
         # By default, it's the device's MAC
         current_mac = self._device.address
         # But metadevices have source_devices
         if self._device.metadevice_type & METADEVICE_DEVICETYPES:
             # Check the current sources and find the latest
-            current_mac: str = STATE_UNAVAILABLE
+            current_mac = STATE_UNAVAILABLE
             _best_stamp = 0
             for source_ad in self._device.adverts.values():
                 if source_ad.stamp > _best_stamp:  # It's a valid ad
                     current_mac = source_ad.device_address
                     _best_stamp = source_ad.stamp
-
-        # Limit how many attributes we list - prefer new sensors instead
-        # since oft-changing attribs cause more db writes than sensors
-        # "last_seen": self.coordinator.dt_mono_to_datetime(self._device.last_seen),
-        attribs = {}
-        if self.name == "Floor":
-            # Only what the floor itself is. The area attributes (and the
-            # current MAC, already on the Area sensor) change on every area
-            # switch, so carrying them here wrote a recorder row for the
-            # floor sensor each time its state had not changed: about half of
-            # all Floor rows were attribute-only.
-            attribs["floor_id"] = self._device.floor_id
-            attribs["floor_name"] = self._device.floor_name
-            attribs["floor_level"] = self._device.floor_level
-            return attribs
-        if self.name == "Area":
-            attribs["area_id"] = self._device.area_id
-            attribs["area_name"] = self._device.area_name
-            attribs["floor_id"] = self._device.floor_id
-            attribs["floor_name"] = self._device.floor_name
-            attribs["floor_level"] = self._device.floor_level
-        attribs["current_mac"] = current_mac
-
-        return attribs
+        return {
+            "area_id": self._device.area_id,
+            "area_name": self._device.area_name,
+            "floor_id": self._device.floor_id,
+            "floor_name": self._device.floor_name,
+            "floor_level": self._device.floor_level,
+            "current_mac": current_mac,
+        }
 
 
 class BermudaSensorFloor(BermudaSensor):

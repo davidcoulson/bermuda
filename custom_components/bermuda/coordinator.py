@@ -133,6 +133,17 @@ Cancellable = Callable[[], None]
 # A MAC-48 in the colon-separated form HA uses for CONNECTION_BLUETOOTH.
 MAC_ADDRESS_RE = re.compile(r"^[0-9A-Fa-f]{2}(:[0-9A-Fa-f]{2}){5}$")
 
+# How far before the previous cycle's start an advert's stamp may lie and
+# still be handed to process_advertisement again (see _async_gather_advert_data).
+GATHER_STAMP_MARGIN = 0.5
+
+# The device-registry update events worth acting on: a scanner moved to
+# another area or renamed, or connections / identifiers that could make an
+# entry a scanner or a Private BLE Device. Any other update (ESPHome
+# refreshing a proxy's sw_version on reconnect, a label, a configuration
+# URL) used to force every scanner to be re-resolved on the next cycle.
+DEVREG_CHANGES_OF_INTEREST = frozenset({"area_id", "name", "name_by_user", "connections", "identifiers", "disabled_by"})
+
 
 class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     """
@@ -565,7 +576,11 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         Private BLE Devices.
         """
         if ev.data["action"] == "update":
-            _LOGGER.debug("Device registry UPDATE. ev: %s changes: %s", ev, ev.data["changes"])
+            changes = ev.data.get("changes") or {}
+            if not DEVREG_CHANGES_OF_INTEREST.intersection(changes):
+                _LOGGER.debug("Device registry update changed only %s, nothing to do", list(changes))
+                return
+            _LOGGER.debug("Device registry UPDATE. ev: %s changes: %s", ev, changes)
         else:
             _LOGGER.debug("Device registry has changed. ev: %s", ev)
 
@@ -908,9 +923,6 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
     def _async_gather_advert_data(self):
         """Perform the gathering of backend Bluetooth Data and updating scanners and devices."""
-        nowstamp = monotonic_time_coarse()
-        _timestamp_cutoff = nowstamp - min(PRUNE_TIME_DEFAULT, PRUNE_TIME_UNKNOWN_IRK)
-
         # Pick up scanners that have come or gone, and re-read them all in
         # full if something has asked for that since the last cycle.
         self._refresh_scanners()
@@ -943,7 +955,13 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             # a cycle on a 69-proxy install): the same answer - a remote
             # scanner's stamps dict, or nothing for a local adaptor.
             stamps = scanner_device.stamps if scanner_device.is_remote_scanner else None
-            cutoff = self.stamp_last_update_started - 3
+            # An advert stamped before the previous cycle began was processed
+            # by that cycle: a remote scanner records the stamp and the advert
+            # data in the one callback, so the data is never newer than its
+            # stamp. The margin only covers the coarse clock. It used to be
+            # 3 s, which put every advert through process_advertisement three
+            # or four times before it aged out.
+            cutoff = self.stamp_last_update_started - GATHER_STAMP_MARGIN
 
             # Now go through the scanner's adverts and send them to our device objects.
             for bledevice, advertisementdata in ha_scanner.discovered_devices_and_advertisement_data.values():

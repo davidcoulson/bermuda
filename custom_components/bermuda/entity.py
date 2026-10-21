@@ -28,6 +28,36 @@ if TYPE_CHECKING:
     # from . import BermudaDevice
 
 
+def published_shape(entity) -> tuple:
+    """
+    The parts of what async_write_ha_state publishes that can change between cycles.
+
+    Name, unit, device class and capability attributes are fixed for the life
+    of a Bermuda entity, so state, icon, availability and the extra attributes
+    are what decide whether a write would change anything.
+    """
+    attrs = entity.extra_state_attributes
+    return (entity.available, entity.state, entity.icon, dict(attrs) if attrs else None)
+
+
+def write_if_changed(entity) -> bool:
+    """
+    Write the entity's state only when it would differ from the last write.
+
+    Every Bermuda entity (about nine per tracked device) wrote its state on
+    every cycle. HA's state machine drops an identical write before the
+    recorder sees it, but only after building the full State (attributes,
+    unit conversion, registry lookups), so the cost was paid each second for
+    every entity whether or not anything had moved. Returns whether it wrote.
+    """
+    shape = published_shape(entity)
+    if shape == entity.bermuda_last_published:
+        return False
+    entity.bermuda_last_published = shape
+    entity.async_write_ha_state()
+    return True
+
+
 class BermudaEntity(CoordinatorEntity):
     """
     Co-ordinator for Bermuda data.
@@ -55,6 +85,7 @@ class BermudaEntity(CoordinatorEntity):
         self.bermuda_update_interval = config_entry.options.get(CONF_UPDATE_INTERVAL, DEFAULT_UPDATE_INTERVAL)
         self.bermuda_last_state: Any = 0
         self.bermuda_last_stamp: float = 0
+        self.bermuda_last_published: tuple | None = None
 
     def _cached_ratelimit(self, statevalue: Any, fast_falling=True, fast_rising=False, interval=None):
         """
@@ -100,7 +131,7 @@ class BermudaEntity(CoordinatorEntity):
             if self.device_entry:
                 # We have a new name locally, so let's update the device registry.
                 self.dr.async_update_device(self.device_entry.id, name=self._device.name)
-        self.async_write_ha_state()
+        write_if_changed(self)
 
     @property
     def unique_id(self):
@@ -204,15 +235,12 @@ class BermudaGlobalEntity(CoordinatorEntity):
         self._cache_ratelimit_value = None
         self._cache_ratelimit_stamp: float = 0
         self._cache_ratelimit_interval = 60
+        self.bermuda_last_published: tuple | None = None
 
     @callback
     def _handle_coordinator_update(self) -> None:
-        """
-        Handle updated data from the co-ordinator.
-
-        (we don't need to implement this, but if we want to do anything special we can)
-        """
-        self.async_write_ha_state()
+        """Handle updated data from the co-ordinator: publish only a change."""
+        write_if_changed(self)
 
     def _cached_ratelimit(self, statevalue: Any, interval: int | None = None):
         """A simple way to rate-limit sensor updates."""

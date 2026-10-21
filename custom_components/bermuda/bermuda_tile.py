@@ -293,6 +293,7 @@ class BermudaTileManager:
         self._pattern_saved_at = 0.0
         self._probes_expired_at = 0.0
         self._closed = False
+        self._tiles_this_cycle: list[BermudaDevice] | None = None
 
     # --- persistence ---------------------------------------------------------
 
@@ -391,6 +392,7 @@ class BermudaTileManager:
         """
         coordinator = self._coordinator
         nowstamp = monotonic_time_coarse() if nowstamp is None else nowstamp
+        self._tiles_this_cycle = None  # see _tiles
         if nowstamp - self._probes_expired_at >= 60.0:
             self._expire_probes(nowstamp)
         if self._started is None:
@@ -469,16 +471,32 @@ class BermudaTileManager:
         """
         if not self._probes:
             return
-        for device in list(self._coordinator.devices.values()):
+        for device in self._tiles():
             if (
-                not getattr(device, "is_tile", False)
-                or device.metadevice_sources
-                or device.address in self._probes
+                device.address in self._probes
                 or not device.first_seen
                 or nowstamp - device.first_seen > TILE_HANDOVER_WINDOW + TILE_SILENT_SECS
             ):
                 continue
             self._inherit_answer(device.address, nowstamp)
+
+    def _tiles(self) -> list[BermudaDevice]:
+        """
+        Every Tile-advertising address Bermuda has heard (not the metadevices).
+
+        Rotation following, the quiet-address handover and orphan recovery
+        each walked all of coordinator.devices - about a thousand on a busy
+        install - every cycle, per Tile, for as long as a bound address stayed
+        silent. They share one walk per cycle now, made only when one of them
+        asks (async_update clears it).
+        """
+        if self._tiles_this_cycle is None:
+            self._tiles_this_cycle = [
+                device
+                for device in self._coordinator.devices.values()
+                if getattr(device, "is_tile", False) and not device.metadevice_sources
+            ]
+        return self._tiles_this_cycle
 
     def bound_sources(self) -> set[str]:
         return {a for sources in self.bindings.values() for a in sources}
@@ -501,12 +519,8 @@ class BermudaTileManager:
         taken = self.bound_sources()
         return [
             d
-            for d in self._coordinator.devices.values()
-            if getattr(d, "is_tile", False)
-            and d.address not in taken
-            and not d.metadevice_sources
-            and d.last_seen
-            and nowstamp - d.last_seen <= TILE_SILENT_SECS
+            for d in self._tiles()
+            if d.address not in taken and d.last_seen and nowstamp - d.last_seen <= TILE_SILENT_SECS
         ]
 
     def _adopt_by_pattern(self, tile_id: str, nowstamp: float) -> bool:
@@ -605,13 +619,8 @@ class BermudaTileManager:
         if last is not None and nowstamp - last < TILE_ORPHAN_SWEEP_SECS:
             return self._adopt_by_pattern(tile_id, nowstamp)
         self._orphan_sweep_at[tile_id] = nowstamp
-        for device in list(self._coordinator.devices.values()):
-            if (
-                not getattr(device, "is_tile", False)
-                or device.address in taken
-                or device.metadevice_sources
-                or not self._probe_possible(device, nowstamp)
-            ):
+        for device in list(self._tiles()):
+            if device.address in taken or not self._probe_possible(device, nowstamp):
                 continue
             self._request_probe(device.address, nowstamp=nowstamp)
             result = self._probes.get(device.address)
@@ -731,11 +740,9 @@ class BermudaTileManager:
         window_end = bound.last_seen + TILE_HANDOVER_WINDOW
         candidates = [
             device
-            for device in coordinator.devices.values()
-            if getattr(device, "is_tile", False)
-            and device.address != bound.address
+            for device in self._tiles()
+            if device.address != bound.address
             and device.address not in taken
-            and not device.metadevice_sources  # not itself a metadevice
             and window_start <= (device.first_seen or 0) <= window_end
             and nowstamp - device.last_seen <= TILE_HANDOVER_WINDOW
         ]

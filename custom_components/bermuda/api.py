@@ -801,9 +801,8 @@ def async_get_advert_snapshot(
             if kept is not None and _advert_rank(advert) <= (kept["distance"] is not None, kept["stamp"] or 0.0):
                 continue
             scanner_device = coordinator.devices.get(advert.scanner_address) or advert.scanner_device
-            # The scanner DEVICE's name is authoritative; advert.name is a copy
-            # taken when the advert was created and goes stale if the scanner is
-            # renamed. sensor.py makes the same distinction deliberately.
+            # The scanner DEVICE's name is authoritative (advert.name reads
+            # through to it now, but a test double may lack either).
             scanner_name = getattr(scanner_device, "name", None) or advert.name
             scanners[advert.scanner_address] = {
                 "name": scanner_name,

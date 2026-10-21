@@ -86,13 +86,28 @@ def test_handle_devreg_malformed_identifier():
         _do_private_device_init=False,
     )
 
-    event = SimpleNamespace(data={"action": "update", "device_id": "malformed-device", "changes": {}})
+    event = SimpleNamespace(data={"action": "update", "device_id": "malformed-device", "changes": {"area_id": None}})
 
     # Previously raised ValueError: too many values to unpack (expected 2).
     BermudaDataUpdateCoordinator.handle_devreg_changes(coordinator, event)
 
     # Reached the end of the identifier branch without raising.
     assert coordinator._scanner_init_pending is True
+
+
+def test_handle_devreg_ignores_updates_of_no_interest():
+    """An ESPHome proxy refreshing its sw_version must not force a scanner re-resolve."""
+    looked_up = []
+    coordinator = SimpleNamespace(
+        devices={},
+        dr=SimpleNamespace(async_get=lambda device_id: looked_up.append(device_id)),
+        _scanner_init_pending=False,
+        _do_private_device_init=False,
+    )
+    for changes in ({"sw_version": "2026.9.0"}, {"labels": set(), "configuration_url": None}, {}):
+        event = SimpleNamespace(data={"action": "update", "device_id": "proxy-1", "changes": changes})
+        BermudaDataUpdateCoordinator.handle_devreg_changes(coordinator, event)
+    assert coordinator._scanner_init_pending is False and looked_up == []
 
 
 def test_update_metadevices_copies_source_attributes():
@@ -449,7 +464,7 @@ def test_gather_skips_old_adverts_by_the_scanners_stamps():
         "aa:aa:aa:aa:aa:01": SimpleNamespace(
             is_remote_scanner=True,
             async_as_scanner_update=lambda s: None,
-            stamps={"11:11:11:11:11:01": 50.0, "11:11:11:11:11:02": 99.0},
+            stamps={"11:11:11:11:11:01": 50.0, "11:11:11:11:11:02": 99.8},
         ),
         "aa:aa:aa:aa:aa:02": SimpleNamespace(
             is_remote_scanner=False, async_as_scanner_update=lambda s: None, stamps=None
@@ -466,5 +481,7 @@ def test_gather_skips_old_adverts_by_the_scanners_stamps():
         findmy_manager=SimpleNamespace(check_mac=lambda address: None),
     )
     BermudaDataUpdateCoordinator._async_gather_advert_data(coordinator)
-    # ..:01 is stamped 50 (< 100 - 3): skipped. ..:02 fresh, ..:03 unstamped, ..:04 a local adaptor's.
+    # ..:01 is stamped 50 (before the previous cycle began at 100): skipped.
+    # ..:02 is stamped 99.8, inside the half-second margin for the coarse
+    # clock: processed. ..:03 unstamped, ..:04 a local adaptor's.
     assert seen == ["11:11:11:11:11:02", "11:11:11:11:11:03", "11:11:11:11:11:04"]
