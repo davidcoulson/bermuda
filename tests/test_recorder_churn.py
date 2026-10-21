@@ -31,6 +31,7 @@ def _range_sensor(distance):
         bermuda_last_stamp=0,
     )
     entity._cached_ratelimit = lambda value, **kw: BermudaSensorRange._cached_ratelimit(entity, value, **kw)
+    entity._deadbanded_distance = lambda *args: BermudaSensorRange._deadbanded_distance(entity, *args)
     return entity
 
 
@@ -267,3 +268,50 @@ def test_a_large_drop_is_shown_at_once(_clock):
     assert _publish(entity, 8.0, NOW) == 8.0
     assert _publish(entity, 6.5, NOW) == 8.0  # 1.5 m < 25 % of 8 m
     assert _publish(entity, 6.0, NOW) == 6.0  # 25 %: at once
+
+
+def _scanner_range_sensor(distance):
+    scanner = SimpleNamespace(address="11:22:33:44:55:66")
+    advert = SimpleNamespace(rssi_distance=distance)
+    entity = _range_sensor(None)
+    entity._device.get_scanner = lambda address: advert if address == scanner.address else None
+    entity._scanner = scanner
+    return entity, advert
+
+
+def test_per_scanner_distance_has_the_same_deadband(_clock):
+    """Enabled per-scanner Distance sensors used to publish every interval."""
+    entity, advert = _scanner_range_sensor(3.0)
+    read = sensor_module.BermudaSensorScannerRange.native_value.fget
+    assert read(entity) == 3.0
+    for second in range(1, 15):
+        _clock["now"] = NOW + second
+        advert.rssi_distance = 3.1  # jitter within the 0.3 m deadband
+        assert read(entity) == 3.0
+    _clock["now"] = NOW + 26
+    advert.rssi_distance = 3.6
+    assert read(entity) == 3.6
+    advert.rssi_distance = None  # the scanner stopped hearing us
+    assert read(entity) is None
+
+
+def test_global_counts_are_only_taken_when_the_cache_is_stale(_clock):
+    """count_active_* walk every device: they were evaluated every cycle and
+    then discarded by the 60 s rate limit."""
+    from custom_components.bermuda.entity import BermudaGlobalEntity
+
+    calls = []
+
+    def count():
+        calls.append(_clock["now"])
+        return len(calls)
+
+    entity = SimpleNamespace(_cache_ratelimit_value=None, _cache_ratelimit_stamp=0, _cache_ratelimit_interval=60)
+    read = lambda: BermudaGlobalEntity._cached_ratelimit(entity, count)  # noqa: E731
+    assert read() == 1
+    for second in range(1, 60):
+        _clock["now"] = NOW + second
+        assert read() == 1
+    _clock["now"] = NOW + 61
+    assert read() == 2
+    assert calls == [NOW, NOW + 61]

@@ -197,6 +197,10 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         self.stamp_last_update: float = 0  # Last time we ran an update, from monotonic_time_coarse()
         self.stamp_last_update_started: float = 0
         self.stamp_last_prune: float = 0  # When we last pruned device list
+        # Counts update cycles. An advert records the cycle it was last
+        # calculated in, so an advert shared between a source device and its
+        # metadevice is calculated once a cycle (see BermudaDevice.calculate_data).
+        self.update_cycle: int = 0
 
         self.member_uuids = {}
         self.company_uuids = {}
@@ -413,16 +417,25 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
             SupportsResponse.ONLY,
         )
 
-        # Register for newly discovered / changed BLE devices
+        # Register for newly discovered / changed BLE devices. The callback
+        # only seeds update cycles until entities exist, then unregisters
+        # itself (see async_handle_advert).
+        self._advert_callback_cancel = None
         if self.config_entry is not None:
-            self.config_entry.async_on_unload(
-                bluetooth.async_register_callback(
-                    self.hass,
-                    self.async_handle_advert,
-                    bluetooth.BluetoothCallbackMatcher(connectable=False),
-                    bluetooth.BluetoothScanningMode.ACTIVE,
-                )
+            self._advert_callback_cancel = bluetooth.async_register_callback(
+                self.hass,
+                self.async_handle_advert,
+                bluetooth.BluetoothCallbackMatcher(connectable=False),
+                bluetooth.BluetoothScanningMode.ACTIVE,
             )
+            self.config_entry.async_on_unload(self._cancel_advert_callback)
+
+    @callback
+    def _cancel_advert_callback(self) -> None:
+        """Unregister the advert callback, at most once (HA's cancel is not re-entrant)."""
+        cancel, self._advert_callback_cancel = self._advert_callback_cancel, None
+        if cancel is not None:
+            cancel()
 
     # Options a consumer (api.async_set_rssi_offsets) has already applied in
     # memory and is about to persist to the config entry. The entry's update
@@ -681,7 +694,14 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         these periodically (mainly when the data changes, I think). So it's no good for
         responding to changing rssi values, but it *is* good for seeding our updates in case
         there are no defined sensors yet (or the defined ones are away).
+
+        Once any entity listens to the coordinator it schedules its own refreshes,
+        so the callback unregisters itself. It cost only a stamp compare, but HA
+        called it for every advert it processed, for as long as Bermuda ran.
         """
+        if self._listeners:
+            self._cancel_advert_callback()
+            return
         # _LOGGER.debug(
         #     "New Advert! change: %s, scanner: %s mac: %s name: %s serviceinfo: %s",
         #     change,
@@ -833,6 +853,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
         try:  # so we can still clean up update_in_progress
             nowstamp = monotonic_time_coarse()
+            self.update_cycle += 1
 
             # Roll the FindMy address table forward if it has aged out. This is
             # dispatched to a background task, so it does not gate the adverts we

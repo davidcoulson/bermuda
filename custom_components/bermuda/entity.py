@@ -243,12 +243,20 @@ class BermudaGlobalEntity(CoordinatorEntity):
         write_if_changed(self)
 
     def _cached_ratelimit(self, statevalue: Any, interval: int | None = None):
-        """A simple way to rate-limit sensor updates."""
+        """
+        A simple way to rate-limit sensor updates.
+
+        ``statevalue`` may be a callable, which is only called when the cache
+        is stale: a count that walks every device is then taken once an
+        interval instead of every cycle, only to be thrown away.
+        """
         if interval is not None:
             self._cache_ratelimit_interval = interval
         nowstamp = monotonic_time_coarse()
 
         if nowstamp > self._cache_ratelimit_stamp + self._cache_ratelimit_interval:
+            if callable(statevalue):
+                statevalue = statevalue()
             self._cache_ratelimit_stamp = nowstamp
             self._cache_ratelimit_value = statevalue
             return statevalue

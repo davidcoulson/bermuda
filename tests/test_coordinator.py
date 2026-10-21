@@ -221,6 +221,7 @@ def test_async_update_data_internal_single_pass_per_device():
         _waitingfor_load_manufacturer_ids=False,
         stamp_last_update_started=0,
         stamp_last_update=0,
+        update_cycle=0,
         last_update_success=False,
         _async_gather_advert_data=lambda: True,
         update_metadevices=lambda: None,
@@ -244,6 +245,33 @@ def test_async_update_data_internal_single_pass_per_device():
     mock_dispatch.assert_called_once_with(coordinator.hass, SIGNAL_DEVICE_NEW, "tracked")
 
     assert coordinator.last_update_success is True
+    assert coordinator.update_cycle == 1
+
+
+def test_async_handle_advert_seeds_updates_only_until_an_entity_listens():
+    """The bluetooth callback drives refreshes while nothing else can, then
+    unregisters itself (once) as soon as the coordinator has a listener."""
+    cancel = MagicMock()
+    coordinator = SimpleNamespace(
+        _listeners={},
+        stamp_last_update=0,
+        _async_update_data_internal=MagicMock(),
+        _advert_callback_cancel=cancel,
+    )
+    coordinator._cancel_advert_callback = lambda: BermudaDataUpdateCoordinator._cancel_advert_callback(coordinator)
+    handle = BermudaDataUpdateCoordinator.async_handle_advert
+
+    handle(coordinator, MagicMock(), MagicMock())
+    coordinator._async_update_data_internal.assert_called_once()
+    cancel.assert_not_called()
+
+    coordinator._listeners = {1: (lambda: None, None)}
+    handle(coordinator, MagicMock(), MagicMock())
+    handle(coordinator, MagicMock(), MagicMock())
+    coordinator._cancel_advert_callback()  # the config entry's unload, later
+    coordinator._async_update_data_internal.assert_called_once()
+    cancel.assert_called_once()
+    assert coordinator._advert_callback_cancel is None
 
 
 def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):

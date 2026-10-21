@@ -502,3 +502,60 @@ def test_settled_adverts_are_not_recalculated(mock_coordinator):
     device.calculate_data()
     assert [settled.calls, new_reading.calls, still_near.calls, clearing.calls] == [0, 1, 1, 1]
     assert [advert_is_settled(a) for a in (settled, new_reading, still_near, clearing)] == [True, False, False, False]
+
+
+def test_an_advert_shared_with_a_metadevice_is_calculated_once_per_cycle(mock_coordinator):
+    """update_metadevices copies advert references into the metadevice, so the
+    same object sits in two devices' dicts: it must be calculated once a cycle
+    (whichever device comes first), and again next cycle."""
+    from custom_components.bermuda.bermuda_advert import BermudaAdvert
+
+    class Counting(BermudaAdvert):
+        def __init__(self):  # pylint: disable=super-init-not-called
+            self.new_stamp, self.rssi_distance, self.hist_distance_by_interval = None, 2.5, [2.5]
+            self.calls = 0
+
+        def calculate_data(self):
+            self.calls += 1
+
+    shared = Counting()
+    source = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
+    metadevice = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
+    source.adverts = metadevice.adverts = {("a", "1"): shared}
+
+    mock_coordinator.update_cycle = 1
+    for device in (metadevice, source, metadevice):
+        device.calculate_data()
+    assert shared.calls == 1
+
+    mock_coordinator.update_cycle = 2
+    source.calculate_data()
+    metadevice.calculate_data()
+    assert shared.calls == 2
+
+
+async def test_a_shared_real_advert_gets_one_history_entry_per_cycle(hass):
+    """The visible symptom of the double call: hist_distance_by_interval grew by
+    two each cycle for every metadevice's adverts, halving its smoothing window."""
+    from bleak.backends.scanner import AdvertisementData
+
+    from custom_components.bermuda.bermuda_advert import BermudaAdvert
+    from custom_components.bermuda.const import CONF_MAX_VELOCITY, CONF_SMOOTHING_SAMPLES
+    from bluetooth_data_tools import monotonic_time_coarse
+
+    coordinator = SimpleNamespace(hass=hass, options={}, update_cycle=0)
+    source = BermudaDevice("aa:bb:cc:dd:ee:ff", coordinator)
+    metadevice = BermudaDevice("aa:bb:cc:dd:ee:ff", coordinator)
+    scanner = BermudaDevice("11:22:33:44:55:66", coordinator)
+    options = {CONF_MAX_VELOCITY: 3, CONF_SMOOTHING_SAMPLES: 20}
+    advert = BermudaAdvert(source, AdvertisementData("Tracked", {}, {}, [], None, -70, ()), options, scanner)
+    advert.rssi_distance = advert.rssi_distance_raw = 2.5
+    advert.stamp = monotonic_time_coarse()
+    advert.hist_distance_by_interval = [2.5]
+    source.adverts = metadevice.adverts = {("a", "1"): advert}
+
+    for cycle in (1, 2, 3):
+        coordinator.update_cycle = cycle
+        source.calculate_data()
+        metadevice.calculate_data()
+        assert len(advert.hist_distance_by_interval) == 1 + cycle

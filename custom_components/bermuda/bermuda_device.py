@@ -805,13 +805,17 @@ class BermudaDevice:
         # is a BermudaAdvert: process_advertisement is the only writer (issue
         # #355's empty dict dates from when adverts were dict subclasses), so
         # the isinstance check that ran ~10,000 times a cycle is gone.
+        cycle = self._coordinator.update_cycle
         for advert in self.adverts.values():
-            if advert_is_settled(advert):
+            if advert_is_settled(advert) or advert.calc_cycle == cycle:
                 # Away, cleared, nothing new: calculate_data would return
                 # at its first line. Not calling it at all is most of this
                 # loop's cost - ~10,000 adverts a cycle on a 69-proxy
                 # install, 9 in 10 of them in this state (2026-10-08).
+                # Or already calculated this cycle by the other device that
+                # shares it (a metadevice and its source, see calc_cycle).
                 continue
+            advert.calc_cycle = cycle
             advert.calculate_data()
 
         # Update whether this device has been seen recently, for device_tracker:
