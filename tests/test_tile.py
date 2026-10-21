@@ -972,3 +972,40 @@ def test_bindings_of_untracked_tiles_are_forgotten():
     assert manager.bindings == {} and manager.patterns == {} and manager.uids == {}
     assert tile_id not in coord.metadevices
     assert saved["bindings"] == {}
+
+
+class _CountingDevices(dict):
+    """coordinator.devices that counts how often it is walked."""
+
+    def __init__(self, *args):
+        super().__init__(*args)
+        self.walks = 0
+
+    def values(self):
+        self.walks += 1
+        return super().values()
+
+
+def test_a_silent_tile_walks_the_device_table_at_most_once_a_cycle():
+    """Orphan recovery, the quiet-address handover and rotation following share one walk.
+
+    Each used to scan every device Bermuda had heard, every cycle, per Tile,
+    for as long as a bound address stayed silent.
+    """
+    now = 10_000.0
+    a, b, c = _house(now)
+    a.last_seen = now - 400  # bound address gone for good: orphan recovery every cycle
+    tile_id = tile_metadevice_id(a.address)
+    coord = _Coord({d.address: d for d in (a, b, c)}, configured=[tile_id.upper()])
+    coord.options[CONF_TILE_PROBES] = False  # probes off: adoption by pattern, which lists live unbound Tiles
+    coord.devices = _CountingDevices(coord.devices)
+    manager = BermudaTileManager(coord)
+    manager.bindings[tile_id] = [a.address]
+    manager._probes[c.address] = {"uid": "cafe01", "error": None, "stamp": now}  # makes _follow_rotations walk too
+
+    manager.async_update(nowstamp=now)  # first cycle: _started is set, nothing is declared gone yet
+    first = coord.devices.walks
+    for cycle in range(1, 4):
+        manager.async_update(nowstamp=now + TILE_SILENT_SECS + 10 * cycle)
+    assert first <= 1
+    assert coord.devices.walks - first <= 3

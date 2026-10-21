@@ -1,7 +1,6 @@
 """Create device_tracker entities for Bermuda devices."""
 
-from collections.abc import Mapping
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING
 
 from homeassistant.components.device_tracker import ScannerEntity
 from homeassistant.components.device_tracker.const import SourceType
@@ -82,11 +81,11 @@ class BermudaDeviceTracker(BermudaEntity, ScannerEntity):
         """Uniquely identify this sensor."""
         return self._device.unique_id
 
-    @property
-    def extra_state_attributes(self) -> Mapping[str, Any]:
-        """Return extra state attributes for this device."""
-        _scannername = self._device.area_advert.name if self._device.area_advert is not None else None
-        return {"scanner": _scannername, "area": self._device.area_name}
+    # No extra_state_attributes: the tracker used to carry the nearest
+    # scanner's name and the area, which the Nearest Scanner and Area sensors
+    # already publish. Each change of either wrote a recorder row for the
+    # tracker while its state had been "home" for half an hour: 16 of the 73
+    # Bermuda rows a minute on a 25-device install (2026-10-21).
 
     @property
     def is_connected(self):

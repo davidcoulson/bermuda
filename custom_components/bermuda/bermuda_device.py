@@ -801,23 +801,18 @@ class BermudaDevice:
         etc can be freshly smoothed and filtered.
 
         """
-        # Run calculate_data on each child scanner of this device:
+        # Run calculate_data on each child scanner of this device. Every value
+        # is a BermudaAdvert: process_advertisement is the only writer (issue
+        # #355's empty dict dates from when adverts were dict subclasses), so
+        # the isinstance check that ran ~10,000 times a cycle is gone.
         for advert in self.adverts.values():
-            if isinstance(advert, BermudaAdvert):
-                # in issue #355 someone had an empty dict instead of a scanner object.
-                # it may be due to a race condition during startup, but we check now
-                # just in case. Was not able to reproduce.
-                if advert_is_settled(advert):
-                    # Away, cleared, nothing new: calculate_data would return
-                    # at its first line. Not calling it at all is most of this
-                    # loop's cost - ~10,000 adverts a cycle on a 69-proxy
-                    # install, 9 in 10 of them in this state (2026-10-08).
-                    continue
-                advert.calculate_data()
-            else:
-                _LOGGER_SPAM_LESS.error(
-                    "scanner_not_instance", "Scanner device is not a BermudaDevice instance, skipping."
-                )
+            if advert_is_settled(advert):
+                # Away, cleared, nothing new: calculate_data would return
+                # at its first line. Not calling it at all is most of this
+                # loop's cost - ~10,000 adverts a cycle on a 69-proxy
+                # install, 9 in 10 of them in this state (2026-10-08).
+                continue
+            advert.calculate_data()
 
         # Update whether this device has been seen recently, for device_tracker:
         if (
