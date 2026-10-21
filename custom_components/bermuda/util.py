@@ -55,7 +55,7 @@ def mac_octet_offset(mac_a, mac_b) -> int | None:
     return diff if abs(diff) <= 2 else None
 
 
-@lru_cache(1024)
+@lru_cache(4096)
 def mac_norm(mac: str) -> str:
     """
     Format the mac address string for entry into dev reg.

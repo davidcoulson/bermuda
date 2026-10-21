@@ -608,6 +608,10 @@ class BermudaFindMyManager:
 
     def needs_refresh(self, now: datetime | None = None) -> bool:
         """Whether the lookup table has aged out of its interval."""
+        if not self._accessories and not self._table.macs:
+            # Nothing to derive addresses for and nothing stale to drop: no
+            # executor job every key interval on an install without FindMy.
+            return False
         if self._dirty or self._table.built_at is None:
             return True
         now = now or datetime.now(UTC)

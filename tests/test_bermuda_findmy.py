@@ -254,6 +254,22 @@ def test_needs_refresh_follows_key_interval():
     assert manager.needs_refresh(now + timedelta(minutes=15)) is True
 
 
+def test_needs_refresh_is_false_with_no_accessories():
+    """An install without FindMy accessories never schedules a table build."""
+    manager = BermudaFindMyManager()
+    now = datetime.now(UTC)
+    assert manager.needs_refresh(now) is False
+    assert manager.needs_refresh(now + timedelta(hours=1)) is False
+    accessory = manager.add_accessory(_accessory())
+    assert manager.needs_refresh(now) is True
+    manager.build_table(now)
+    assert manager.needs_refresh(now) is False
+    # Removing the last accessory drops the table at once, so there is
+    # nothing left to rebuild for.
+    manager.remove_accessory(accessory.address)
+    assert manager.needs_refresh(now + timedelta(hours=1)) is False
+
+
 def test_remove_accessory():
     """Removing an accessory drops it from matching."""
     manager = BermudaFindMyManager()
