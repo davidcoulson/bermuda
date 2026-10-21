@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from types import SimpleNamespace
 from unittest.mock import MagicMock, patch
 
@@ -368,6 +369,23 @@ def test_prune_silent_adverts_drops_only_long_dead_ones():
     assert dropped == 4
     assert set(source.adverts) == {("a", "s3"), ("a", "s4"), ("a", "s5"), ("a", "s6")}
     assert set(metadevice.adverts) == {("a", "s4")}, "the shared dead advert goes from the metadevice too"
+
+
+def test_redact_data_redacts_every_address_in_one_string():
+    """Replacements compose: a string holding two known addresses loses both."""
+    coordinator = SimpleNamespace(
+        redactions={
+            "aa:bb:cc:dd:ee:01": "aa::SCANNER_1::01",
+            "aa:bb:cc:dd:ee:02": "aa::CFG_MAC_2::02",
+        },
+        _redact_generic_re=re.compile(r"(?P<start>[0-9A-Fa-f]{2})[:_-]([0-9A-Fa-f]{2}[:_-]){4}(?P<end>[0-9A-Fa-f]{2})"),
+        _redact_generic_sub=r"\g<start>:xx:xx:xx:xx:\g<end>",
+        redaction_list_update=lambda: None,
+    )
+    out = BermudaDataUpdateCoordinator.redact_data(
+        coordinator, "AA:BB:CC:DD:EE:01 heard by aa:bb:cc:dd:ee:02 and 11:22:33:44:55:66"
+    )
+    assert out == "aa::SCANNER_1::01 heard by aa::CFG_MAC_2::02 and 11:xx:xx:xx:xx:66"
 
 
 def _scanner_coordinator(scanners, known):
