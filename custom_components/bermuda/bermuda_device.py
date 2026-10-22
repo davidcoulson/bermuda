@@ -159,6 +159,13 @@ class BermudaDevice:
         # sensor, a SmartTag (see device_family). A label, not an identity.
         self.device_family: str | None = None
         self.family_rotates: bool = False
+        # calculate_data's "is this a configured device" check, cached per
+        # configured list (see there); make_name's address-based fallback,
+        # cached per (manufacturer, address) so slugify runs once, not per call.
+        self._configured_list_seen: list | None = None
+        self._is_configured: bool = False
+        self._fallback_name_key: tuple[str | None, str] | None = None
+        self._fallback_name: str | None = None
         self.diag_area_switch: str | None = None  # saves output of AreaTests
         self.adverts: dict[
             tuple[str, str], BermudaAdvert
@@ -713,12 +720,15 @@ class BermudaDevice:
             self.name = _newname
         elif self.address_type != BDADDR_TYPE_NOT_MAC48:
             # Couldn't find anything nice, we'll have to use the address.
-            # At least see if we can prefix it with manufacturer name
-            if self.manufacturer:
-                _prefix = f"{slugify(self.manufacturer)}"
-            else:
-                _prefix = DOMAIN
-            self.name = f"{_prefix}_{slugify(self.address)}"
+            # At least see if we can prefix it with manufacturer name. This
+            # path runs on every advert that changes a name field, for every
+            # unnamed device, so the slugs are kept until an input changes.
+            key = (self.manufacturer, self.address)
+            if key != self._fallback_name_key or self._fallback_name is None:
+                _prefix = slugify(self.manufacturer) if self.manufacturer else DOMAIN
+                self._fallback_name = f"{_prefix}_{slugify(self.address)}"
+                self._fallback_name_key = key
+            self.name = self._fallback_name
 
         return self.name
 
@@ -829,7 +839,14 @@ class BermudaDevice:
         else:
             self.zone = STATE_NOT_HOME
 
-        if self.address.upper() in self.options.get(CONF_DEVICES, []):
+        # Whether we are a device the user tracks. The configured list is a
+        # plain list of upper-case addresses that only changes with a reload,
+        # so the scan is done once per list, not once per device per cycle.
+        configured = self.options.get(CONF_DEVICES, [])
+        if configured is not self._configured_list_seen:
+            self._configured_list_seen = configured
+            self._is_configured = self.address.upper() in configured
+        if self._is_configured:
             # We are a device we track. Flag for set-up:
             self.create_sensor = True
 
@@ -932,7 +949,11 @@ class BermudaDevice:
             self.make_name()
 
         # ==== Check manfuacturer data (type 0xFF)
-        for manudict in advert.manufacturer_data:
+        # Only the newest entry: the list is newest-first history, and this
+        # runs whenever the newest entry changes. Walking the whole history
+        # re-registered an iBeacon up to HIST_KEEP_COUNT times per change and
+        # let the *oldest* entry's beacon fields win, as it was processed last.
+        for manudict in advert.manufacturer_data[:1]:
             for company_code, man_data in manudict.items():
                 name, generic = self._coordinator.get_manufacturer_from_id(company_code)
                 if name and (self.manufacturer is None or not generic):
@@ -994,6 +1015,9 @@ class BermudaDevice:
                 continue
             if val in [self._coordinator, self.floor, self.area, self.ar, self.fr]:
                 # Objects to ignore completely.
+                continue
+            if var in ("_configured_list_seen", "_fallback_name_key"):
+                # Memo keys, not state: the list is the options' CONF_DEVICES.
                 continue
             if val in [self._hascanner, self.area, self.floor, self.ar, self.fr]:
                 if hasattr(val, "__repr__"):

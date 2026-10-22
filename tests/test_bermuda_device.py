@@ -172,6 +172,54 @@ def test_make_name(bermuda_device):
     assert bermuda_device.name == "Custom Name"
 
 
+def test_make_name_fallback_slugifies_once_per_input(bermuda_device):
+    """The address-based name is rebuilt only when manufacturer or address changes."""
+    from custom_components.bermuda import bermuda_device as module
+
+    with patch.object(module, "slugify", wraps=module.slugify) as slug:
+        assert bermuda_device.make_name() == "bermuda_aa_bb_cc_dd_ee_ff"
+        first = slug.call_count
+        assert first > 0
+        bermuda_device.make_name()
+        bermuda_device.make_name()
+        assert slug.call_count == first, "a repeat call must not slugify again"
+        bermuda_device.manufacturer = "Acme Corp"
+        assert bermuda_device.make_name() == "acme_corp_aa_bb_cc_dd_ee_ff"
+        assert slug.call_count > first
+
+
+def test_calculate_data_flags_a_configured_device_once_per_list(bermuda_device):
+    """The configured-devices scan happens once per options list, not per cycle."""
+    from custom_components.bermuda.const import CONF_DEVICES
+
+    configured = ["AA:BB:CC:DD:EE:FF"]
+    bermuda_device.options[CONF_DEVICES] = configured
+    bermuda_device.calculate_data()
+    assert bermuda_device.create_sensor is True
+    assert bermuda_device._configured_list_seen is configured
+    # A new list (a reload) is scanned again, and a device dropped from it is
+    # no longer flagged (create_sensor itself stays sticky, as before).
+    other = BermudaDevice(address="11:22:33:44:55:66", coordinator=bermuda_device._coordinator)
+    other.options = dict(bermuda_device.options)
+    other.calculate_data()
+    assert other.create_sensor is False
+    other.options[CONF_DEVICES] = ["11:22:33:44:55:66"]
+    other.calculate_data()
+    assert other.create_sensor is True
+
+
+def test_process_manufacturer_data_reads_only_the_newest_entry(bermuda_device):
+    """Older history entries must not re-register or overwrite the current iBeacon."""
+    newest = {0x004C: b"\x02\x15" + b"\xaa" * 16 + b"\x00\x01\x00\x02\xc5"}
+    oldest = {0x004C: b"\x02\x15" + b"\xbb" * 16 + b"\x00\x03\x00\x04\xc5"}
+    advert = SimpleNamespace(service_uuids=[], service_data=[], manufacturer_data=[newest, oldest])
+    bermuda_device._coordinator.get_manufacturer_from_id.return_value = (None, False)
+    bermuda_device.process_manufacturer_data(advert)
+    assert bermuda_device.beacon_uuid == "aa" * 16
+    assert (bermuda_device.beacon_major, bermuda_device.beacon_minor) == ("1", "2")
+    bermuda_device._coordinator.register_ibeacon_source.assert_called_once_with(bermuda_device)
+
+
 def test_process_advertisement(bermuda_device, bermuda_scanner):
     """Test process_advertisement method."""
     advertisement_data = MagicMock()
