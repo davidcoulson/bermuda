@@ -77,6 +77,16 @@ class BermudaAdvert:
 
     """
 
+    # The coordinator update cycle this advert was last calculated in. A
+    # metadevice holds the very same advert objects as its source devices
+    # (update_metadevices copies the references), so without this the second
+    # device to reach a shared advert in a cycle ran calculate_data again:
+    # new_stamp was already consumed, so the "no new reading" branch pushed a
+    # duplicate entry into hist_distance_by_interval and hist_velocity every
+    # cycle, halving the smoothing window and the area hysteresis history for
+    # every metadevice (iBeacon, Private BLE, FindMy, Tile).
+    calc_cycle: int = -1
+
     def __hash__(self) -> int:
         """The device-mac / scanner mac uniquely identifies a received advertisement pair."""
         return hash((self.device_address, self.scanner_address))

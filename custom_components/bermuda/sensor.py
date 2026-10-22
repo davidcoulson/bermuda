@@ -407,9 +407,13 @@ class BermudaSensorRange(BermudaSensor):
         show at once. A new nearest scanner starts a fresh window and is
         published immediately, so Distance stays consistent with Area.
         """
-        distance = self._device.area_distance
         advert = self._device.area_advert
-        scanner_address = advert.scanner_address if advert is not None else None
+        return self._deadbanded_distance(
+            self._device.area_distance, advert.scanner_address if advert is not None else None
+        )
+
+    def _deadbanded_distance(self, distance: float | None, scanner_address: str | None):
+        """The value to publish for ``distance`` as heard by ``scanner_address`` (see native_value)."""
         if distance is None or scanner_address != getattr(self, "_distance_scanner_address", None):
             # Out of range or a different receiver: the first reading must
             # not be measured against the previous receiver's distance.
@@ -486,16 +490,14 @@ class BermudaSensorScannerRange(BermudaSensorRange):
     @property
     def native_value(self):
         """
-        Expose distance to given scanner.
+        Expose distance to given scanner, with the same deadband as Distance.
 
-        Don't break if that scanner's never heard of us!
+        These are disabled by default, but once enabled each one used to write
+        a recorder row on every interval for every scanner that could hear the
+        device. Don't break if that scanner's never heard of us!
         """
-        distance = None
-        if (scanner := self._device.get_scanner(self._scanner.address)) is not None:
-            distance = scanner.rssi_distance
-        if distance is not None:
-            return self._cached_ratelimit(round(distance, 3))
-        return None
+        advert = self._device.get_scanner(self._scanner.address)
+        return self._deadbanded_distance(advert.rssi_distance if advert is not None else None, self._scanner.address)
 
     @property
     def extra_state_attributes(self) -> Mapping[str, Any] | None:
@@ -647,7 +649,7 @@ class BermudaActiveProxyCount(BermudaGlobalSensor):
     @property
     def native_value(self) -> int:
         """Gets the number of proxies we have access to."""
-        return self._cached_ratelimit(self.coordinator.count_active_scanners()) or 0
+        return self._cached_ratelimit(self.coordinator.count_active_scanners) or 0
 
     @property
     def name(self):
@@ -697,7 +699,7 @@ class BermudaVisibleDeviceCount(BermudaGlobalSensor):
     @property
     def native_value(self) -> int:
         """Gets the amount of devices that are active."""
-        return self._cached_ratelimit(self.coordinator.count_active_devices()) or 0
+        return self._cached_ratelimit(self.coordinator.count_active_devices) or 0
 
     @property
     def name(self):
