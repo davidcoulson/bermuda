@@ -14,6 +14,6 @@
   "integration_type": "device",
   "iot_class": "calculated",
   "issue_tracker": "https://github.com/agittins/bermuda/issues",
-  "requirements": [],
+  "requirements": ["aiofiles==24.1.0"],
   "version": "0.8.7-fork-testing.50"
 }
