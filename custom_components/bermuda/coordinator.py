@@ -1542,6 +1542,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 metadevice.beacon_minor = source_device.beacon_minor
                 metadevice.beacon_power = source_device.beacon_power
                 metadevice.beacon_uuid = source_device.beacon_uuid
+                # The metadevice was born with the bermuda_<address> placeholder
+                # name (BermudaDevice.__init__), and nothing else in an iBeacon
+                # metadevice's lifecycle calls make_name - no advert of its own
+                # changes a name field. Without this, whether the placeholder
+                # was ever replaced depended on which unrelated trigger fired
+                # first after a restart, so the slug consumers derive from the
+                # name (entity creation, the async_get_tracked_devices API)
+                # flipped between bermuda_<uuid_major_minor> and the resolved
+                # name from one restart to the next.
+                metadevice.make_name()
 
                 # Check if we should set up sensors for this beacon
                 if metadevice.address.upper() in self.options.get(CONF_DEVICES, []):
@@ -1559,6 +1569,10 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 # If we have a new / better name, use that..
                 metadevice.name_bt_serviceinfo = metadevice.name_bt_serviceinfo or source_device.name_bt_serviceinfo
                 metadevice.name_bt_local_name = metadevice.name_bt_local_name or source_device.name_bt_local_name
+                # A later source can bring the first name fields the metadevice
+                # has (the source that created it may have carried none), so the
+                # name needs resolving again for the same reason as above.
+                metadevice.make_name()
 
     def update_metadevices(self):
         """
