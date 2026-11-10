@@ -315,6 +315,36 @@ def test_scanner_registry_match_prefers_own_device_over_a_mac_neighbour(mock_coo
         assert scanner.name_devreg == "Eilee Bedroom RRN00 4e8948"
 
 
+def test_no_multimatch_warning_when_a_rule_picks_the_winner(mock_coordinator, mock_remote_scanner):
+    """A proxy, its neighbour, a router entry for each and the bluetooth
+    integration's scanner device are five matches, but not an ambiguous one:
+    the warning is for a winner that was only a guess.
+    """
+
+    def dev(name, *connections):
+        return SimpleNamespace(id=name, name=name, name_by_user=None, area_id=None, connections=set(connections))
+
+    def warned(devices):
+        mock_coordinator.dr.async_get_devices = MagicMock(return_value=devices)
+        scanner = BermudaDevice(address="DC:06:75:4E:89:4A", coordinator=mock_coordinator)
+        scanner._hascanner = mock_remote_scanner
+        with patch("custom_components.bermuda.bermuda_device._LOGGER_SPAM_LESS") as log:
+            scanner.async_as_scanner_resolve_device_entries()
+        return log.warning.called
+
+    assert not warned(
+        [
+            dev("proxy", ("mac", "dc:06:75:4e:89:48"), ("bluetooth", "dc:06:75:4e:89:4a")),
+            dev("proxy scanner", ("bluetooth", "DC:06:75:4E:89:4A")),
+            dev("proxy on the router", ("mac", "dc:06:75:4e:89:48")),
+            dev("light", ("mac", "dc:06:75:4e:89:4c")),
+            dev("light on the router", ("mac", "dc:06:75:4e:89:4c")),
+        ]
+    )
+    # No rule applies to any of these, so the winner is a guess: still warn.
+    assert warned([dev(f"stranger {mac}", ("mac", f"dc:06:75:4e:89:{mac}")) for mac in ("47", "49", "4c", "4d")])
+
+
 def test_scanner_registry_match_falls_back_to_the_wifi_plus_two_rule(mock_coordinator, mock_remote_scanner):
     """With no bluetooth entry at all (older cores), the espressif BLE = WiFi + 2
     neighbour beats any other offset."""
