@@ -29,6 +29,7 @@ from .const import (
     DISTANCE_INFINITE,
     DISTANCE_TIMEOUT,
     HIST_KEEP_COUNT,
+    HIST_RSSI_KEEP_COUNT,
     TILE_SERVICE_UUIDS,
 )
 
@@ -563,8 +564,8 @@ class BermudaAdvert:
         # Trim our history lists
         del self.hist_distance[HIST_KEEP_COUNT:]
         del self.hist_interval[HIST_KEEP_COUNT:]
-        del self.hist_rssi[HIST_KEEP_COUNT:]
-        del self.hist_stamp[HIST_KEEP_COUNT:]
+        del self.hist_rssi[HIST_RSSI_KEEP_COUNT:]
+        del self.hist_stamp[HIST_RSSI_KEEP_COUNT:]
         del self.hist_velocity[HIST_KEEP_COUNT:]
 
     def to_dict(self):

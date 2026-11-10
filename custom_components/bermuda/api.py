@@ -701,7 +701,7 @@ def async_get_advert_snapshot(
     that is usually the difference between a dozen devices and several hundred.
 
     `include_history` adds each advert's recent raw samples as
-    ``"history": [[rssi, stamp], ...]`` (newest first, at most HIST_KEEP_COUNT
+    ``"history": [[rssi, stamp], ...]`` (newest first, at most HIST_RSSI_KEEP_COUNT
     entries). Bermuda's own ``distance`` is a running-minimum-biased average
     designed for "which scanner is nearest"; a consumer fitting a position
     from several scanners at once may prefer its own, symmetric estimator over
