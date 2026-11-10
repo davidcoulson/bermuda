@@ -449,15 +449,20 @@ class BermudaDevice:
                     mac_candidates.append((rank, foreign, devreg_count, devreg_device, conn[1]))
         if bt_candidates:
             _rank, _order, scanner_devreg_bt, scanner_devreg_bt_address = min(bt_candidates, key=lambda c: c[:2])
+        mac_rank = 3
         if mac_candidates:
-            _rank, _foreign, _order, scanner_devreg_mac, scanner_devreg_mac_address = min(
+            mac_rank, _foreign, _order, scanner_devreg_mac, scanner_devreg_mac_address = min(
                 mac_candidates, key=lambda c: c[:3]
             )
 
-        if devreg_count not in (1, 2, 3):
+        if devreg_count not in (1, 2, 3) and mac_rank == 3:
             # We expect just the bt, or bt and another like esphome/shelly, or
             # two bt's and shelly/esphome, the second bt being the alternate
-            # MAC address.
+            # MAC address. More than that is only worth a warning when the
+            # winner was a guess: a neighbour with an adjacent MAC plus a
+            # router integration's entry for each board is five matches, yet
+            # the exact-bluetooth or espressif-offset rule still picks the
+            # right one.
             _LOGGER_SPAM_LESS.warning(
                 f"multimatch_devreg_{self._hascanner.source}",
                 "Unexpectedly got %d device registry matches for %s: %s\n",
