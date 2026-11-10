@@ -246,6 +246,12 @@ DOCS = {}
 
 
 HIST_KEEP_COUNT = 10  # How many old timestamps, rssi, etc to keep for each device/scanner pairing.
+# The raw rssi and stamp lists are kept longer: they are what the snapshot API hands
+# out as `history`, and at one sample per UPDATE_INTERVAL ten of them cover 10.5 s,
+# short of the 15 s window Sextant takes its median over. Sixteen cover 16.8 s.
+# The distance and velocity lists stay at HIST_KEEP_COUNT, so the velocity gate
+# looks back exactly as far as it did.
+HIST_RSSI_KEEP_COUNT = 16
 
 # Config entry DATA entries
 

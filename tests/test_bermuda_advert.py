@@ -178,3 +178,21 @@ def test_calculate_data_wakes_from_idle_on_a_new_reading(bermuda_advert):
     advert.calculate_data()
     assert advert.rssi_distance == 2.5
     assert advert.new_stamp is None
+
+
+def test_raw_history_is_kept_longer_than_the_distance_history(bermuda_advert):
+    """The rssi/stamp lists a consumer's median reads outlast the velocity gate's lists."""
+    from custom_components.bermuda.const import HIST_KEEP_COUNT, HIST_RSSI_KEEP_COUNT, UPDATE_INTERVAL
+
+    assert HIST_RSSI_KEEP_COUNT * UPDATE_INTERVAL >= 15  # Sextant's default median window
+    advert = bermuda_advert
+    advert.hist_rssi = list(range(-40, -80, -1))
+    advert.hist_stamp = [200.0 - i for i in range(40)]
+    advert.hist_distance = [2.0] * 40
+    advert.hist_velocity = [0.0] * 40
+    advert.new_stamp = 200.0
+    advert.rssi_distance_raw = 2.0
+    advert.calculate_data()
+    assert advert.hist_rssi == list(range(-40, -40 - HIST_RSSI_KEEP_COUNT, -1))
+    assert len(advert.hist_stamp) == HIST_RSSI_KEEP_COUNT
+    assert len(advert.hist_distance) == len(advert.hist_velocity) == HIST_KEEP_COUNT
