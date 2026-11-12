@@ -1230,7 +1230,9 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 key
                 for key, advert in adverts.items()
                 if getattr(advert, "rssi_distance", None) is None
-                and getattr(advert, "new_stamp", None) is None
+                # (a device nobody tracks is never smoothed, so its last
+                # reading stays pending for good: an old one is no reason to keep it)
+                and (getattr(advert, "new_stamp", None) is None or advert.new_stamp < cutoff)
                 and not getattr(advert, "hist_distance_by_interval", None)
                 and (getattr(advert, "stamp", None) is None or advert.stamp < cutoff)
             ]

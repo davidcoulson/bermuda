@@ -825,8 +825,26 @@ class BermudaDevice:
         # is a BermudaAdvert: process_advertisement is the only writer (issue
         # #355's empty dict dates from when adverts were dict subclasses), so
         # the isinstance check that ran ~10,000 times a cycle is gone.
+        # Whether we are a device the user tracks. The configured list is a
+        # plain list of upper-case addresses that only changes with a reload,
+        # so the scan is done once per list, not once per device per cycle.
+        configured = self.options.get(CONF_DEVICES, [])
+        if configured is not self._configured_list_seen:
+            self._configured_list_seen = configured
+            self._is_configured = self.address.upper() in configured
+        if self._is_configured:
+            # We are a device we track. Flag for set-up:
+            self.create_sensor = True
+
+        # Only a tracked device's smoothed distance is ever read (its sensors,
+        # area selection, the snapshot API). Everything else in range - other
+        # people's phones, and every proxy hearing every other proxy's beacon -
+        # was most of the live adverts (2,270 a cycle with 24 tracked devices
+        # and 79 proxies, 2026-11-12) and is left raw: rssi, rssi_distance_raw
+        # and the history are filled by update_advertisement, not here. A
+        # metadevice smooths the adverts it shares with its sources.
         cycle = self._coordinator.update_cycle
-        for advert in self.adverts.values():
+        for advert in self.adverts.values() if self.create_sensor else ():
             if advert_is_settled(advert) or advert.calc_cycle == cycle:
                 # Away, cleared, nothing new: calculate_data would return
                 # at its first line. Not calling it at all is most of this
@@ -847,17 +865,6 @@ class BermudaDevice:
             self.zone = STATE_HOME
         else:
             self.zone = STATE_NOT_HOME
-
-        # Whether we are a device the user tracks. The configured list is a
-        # plain list of upper-case addresses that only changes with a reload,
-        # so the scan is done once per list, not once per device per cycle.
-        configured = self.options.get(CONF_DEVICES, [])
-        if configured is not self._configured_list_seen:
-            self._configured_list_seen = configured
-            self._is_configured = self.address.upper() in configured
-        if self._is_configured:
-            # We are a device we track. Flag for set-up:
-            self.create_sensor = True
 
     def process_advertisement(self, scanner_device: BermudaDevice, advertisementdata: AdvertisementData):
         """

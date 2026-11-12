@@ -375,6 +375,7 @@ def test_prune_silent_adverts_drops_only_long_dead_ones():
     live = ad(old, distance=2.5)  # still has a distance
     with_history = ad(old, hist=[3.0])  # history not yet cleared
     pending = ad(old, new_stamp=now)  # an update waiting to be processed
+    never_smoothed = ad(old, new_stamp=old)  # an untracked device's: its last reading stays pending
     never_stamped = ad(None)
 
     source = SimpleNamespace(
@@ -386,6 +387,7 @@ def test_prune_silent_adverts_drops_only_long_dead_ones():
             ("a", "s5"): with_history,
             ("a", "s6"): pending,
             ("a", "s7"): never_stamped,
+            ("a", "s8"): never_smoothed,
         }
     )
     metadevice = SimpleNamespace(adverts={("a", "s2"): shared_dead, ("a", "s4"): live})
@@ -394,7 +396,7 @@ def test_prune_silent_adverts_drops_only_long_dead_ones():
 
     dropped = BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
 
-    assert dropped == 4
+    assert dropped == 5
     assert set(source.adverts) == {("a", "s3"), ("a", "s4"), ("a", "s5"), ("a", "s6")}
     assert set(metadevice.adverts) == {("a", "s4")}, "the shared dead advert goes from the metadevice too"
 
