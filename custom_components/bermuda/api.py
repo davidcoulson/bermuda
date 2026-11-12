@@ -284,7 +284,8 @@ def async_get_scanner_ranging(hass: HomeAssistant, max_age: float | None = None)
           "scanners": {
             "<tx scanner address>": {
               "<rx scanner address>": {
-                "distance": float | None,   # Bermuda's filtered estimate (m)
+                "distance": float | None,   # Bermuda's filtered estimate (m); None unless the
+                                            # transmitting scanner is also a tracked device
                 "distance_raw": float | None,
                 "rssi": int | None,
                 "age": float | None,        # seconds since rx last heard tx
@@ -734,7 +735,8 @@ def async_get_advert_snapshot(
                   "address": str,   # stable join key
                   "area_id": str | None,
                   "area_name": str | None,
-                  "distance": float | None,   # smoothed, METRES
+                  "distance": float | None,   # smoothed, METRES (tracked devices only:
+                                              # None for the rest, use distance_raw)
                   "distance_raw": float | None,
                   "rssi": float | None,
                   "stamp": float,   # monotonic, when this advert was received

@@ -603,9 +603,45 @@ def test_settled_adverts_are_not_recalculated(mock_coordinator):
     clearing = Counting(None, None, [3.0])
     device = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
     device.adverts = {("a", "1"): settled, ("a", "2"): new_reading, ("a", "3"): still_near, ("a", "4"): clearing}
+    device.create_sensor = True
     device.calculate_data()
     assert [settled.calls, new_reading.calls, still_near.calls, clearing.calls] == [0, 1, 1, 1]
     assert [advert_is_settled(a) for a in (settled, new_reading, still_near, clearing)] == [True, False, False, False]
+
+
+def test_only_tracked_devices_are_smoothed(mock_coordinator):
+    """Nothing reads an untracked device's smoothed distance, so its adverts
+    are left raw - but a tracked metadevice still smooths the adverts it
+    shares with its (untracked) source."""
+    from custom_components.bermuda.bermuda_advert import BermudaAdvert
+    from custom_components.bermuda.const import CONF_DEVICES
+
+    class Counting(BermudaAdvert):
+        def __init__(self):  # pylint: disable=super-init-not-called
+            self.new_stamp, self.rssi_distance, self.hist_distance_by_interval = 123.0, None, []
+            self.calls = 0
+
+        def calculate_data(self):
+            self.calls += 1
+
+    stranger, shared = Counting(), Counting()
+    untracked = BermudaDevice(address="AA:BB:CC:DD:EE:02", coordinator=mock_coordinator)
+    untracked.adverts = {("b", "1"): stranger}
+    source = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
+    metadevice = BermudaDevice(address="AA:BB:CC:DD:EE:03", coordinator=mock_coordinator)
+    source.adverts = metadevice.adverts = {("a", "1"): shared}
+    metadevice.create_sensor = True
+
+    mock_coordinator.update_cycle = 1
+    for device in (untracked, source, metadevice):
+        device.calculate_data()
+    assert [stranger.calls, shared.calls] == [0, 1]
+
+    # A device on the configured list is tracked from its first cycle.
+    mock_coordinator.options[CONF_DEVICES] = [untracked.address.upper()]
+    untracked.options = mock_coordinator.options
+    untracked.calculate_data()
+    assert stranger.calls == 1
 
 
 def test_an_advert_shared_with_a_metadevice_is_calculated_once_per_cycle(mock_coordinator):
@@ -626,6 +662,7 @@ def test_an_advert_shared_with_a_metadevice_is_calculated_once_per_cycle(mock_co
     source = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
     metadevice = BermudaDevice(address="AA:BB:CC:DD:EE:01", coordinator=mock_coordinator)
     source.adverts = metadevice.adverts = {("a", "1"): shared}
+    source.create_sensor = metadevice.create_sensor = True
 
     mock_coordinator.update_cycle = 1
     for device in (metadevice, source, metadevice):
@@ -657,6 +694,7 @@ async def test_a_shared_real_advert_gets_one_history_entry_per_cycle(hass):
     advert.stamp = monotonic_time_coarse()
     advert.hist_distance_by_interval = [2.5]
     source.adverts = metadevice.adverts = {("a", "1"): advert}
+    metadevice.create_sensor = True
 
     for cycle in (1, 2, 3):
         coordinator.update_cycle = cycle
