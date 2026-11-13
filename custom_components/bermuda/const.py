@@ -172,6 +172,7 @@ class IrkTypes(Enum):
 # expires adverts at 195 seconds to avoid churning.
 #
 PRUNE_MAX_COUNT = 1000  # How many device entries to allow at maximum
+PRUNE_MAX_BEACON_SOURCES = 8  # Source MACs an untracked iBeacon may keep outside that quota
 PRUNE_TIME_INTERVAL = 180  # Every 3m, prune stale devices
 # ### Note about timeouts: Bluez and HABT cache for 180 or 195 seconds. Setting
 # timeouts below that may result in prune/create/prune churn, but as long as

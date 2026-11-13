@@ -234,7 +234,7 @@ class BermudaDevice:
                     self._coordinator.config_entry.async_on_unload(
                         _pble_coord.async_track_service_info(self.async_handle_pble_callback, _irk_bytes)
                     )
-                    _LOGGER.debug("Private BLE Callback registered for %s, %s", self.name, self.address)
+                    _LOGGER.debug("Private BLE Callback registered for %s, %s...", self.name, self.address[:4])
                     #
                     # Also register a callback with our own, which can fake the PBLE callbacks.
                     self._coordinator.config_entry.async_on_unload(

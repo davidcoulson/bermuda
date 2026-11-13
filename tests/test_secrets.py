@@ -17,6 +17,7 @@ from homeassistant.core import Context, ServiceCall
 from homeassistant.exceptions import Unauthorized
 
 from custom_components.bermuda.bermuda_irk import BermudaIrkManager
+from custom_components.bermuda.const import CONF_DEVICES
 from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
 
 IRK = bytes(range(16))  # 000102...0f
@@ -70,3 +71,17 @@ async def test_dump_devices_refuses_non_admin_users():
         await dump(fake, call("nobody"))
     assert await dump(fake, call("admin")) == {}  # admin: the (empty) dump
     assert await dump(fake, call(None)) == {}  # automations carry no user
+
+
+def test_redaction_list_never_echoes_a_configured_irk():
+    irk = IRK.hex()
+    fake = SimpleNamespace(
+        redactions={},
+        scanner_list=[],
+        devices={},
+        options={CONF_DEVICES: [irk, "not-a-known-format-id"]},
+        stamp_redactions_expiry=None,
+    )
+    BermudaDataUpdateCoordinator.redaction_list_update(fake)
+    assert irk not in " ".join(fake.redactions.values())
+    assert "not-a-known-format-id" not in " ".join(fake.redactions.values())

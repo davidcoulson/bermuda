@@ -6,7 +6,12 @@ from types import SimpleNamespace
 
 from bluetooth_data_tools import monotonic_time_coarse
 
-from custom_components.bermuda.const import BDADDR_TYPE_NOT_MAC48, METADEVICE_IBEACON_DEVICE, PRUNE_TIME_DEFAULT
+from custom_components.bermuda.const import (
+    BDADDR_TYPE_NOT_MAC48,
+    BDADDR_TYPE_OTHER,
+    METADEVICE_IBEACON_DEVICE,
+    PRUNE_TIME_DEFAULT,
+)
 from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
 
 
@@ -71,3 +76,31 @@ def test_untracked_ibeacons_are_evicted_oldest_first_over_quota(monkeypatch):
     assert set(coordinator.metadevices) == {"bbbb_1_1", "cccc_1_1"}
     # The evicted beacon's live source goes with it, or it would never re-register.
     assert "aa:aa:aa:aa:aa:aa" not in coordinator.devices
+
+
+def test_untracked_ibeacon_keeps_only_a_few_sources_outside_the_quota(monkeypatch):
+    monkeypatch.setattr("custom_components.bermuda.coordinator.PRUNE_MAX_BEACON_SOURCES", 2)
+    monkeypatch.setattr("custom_components.bermuda.coordinator.PRUNE_MAX_COUNT", 4)
+    now = monotonic_time_coarse()
+    beacon = _beacon("aaaa_1_1", now - 1)
+    sources = [_beacon(f"aa:aa:aa:aa:aa:{n:02x}", now - 1 - n) for n in range(5)]  # newest first
+    for source in sources:
+        source.metadevice_type, source.metadevice_sources = set(), []
+        source.address_type, source.name = BDADDR_TYPE_OTHER, source.address
+    sources[4].create_sensor = True  # over the cap, but tracked in its own right: it stays
+    beacon.metadevice_sources = [s.address for s in sources]
+    devices = {d.address: d for d in (beacon, *sources)}
+    coordinator = SimpleNamespace(
+        stamp_last_prune=0,
+        stamp_redactions_expiry=None,
+        redactions={},
+        irk_manager=SimpleNamespace(async_prune=lambda: None),
+        metadevices={beacon.address: beacon},
+        devices=devices,
+        scanner_list=[],
+        _get_device=devices.get,
+    )
+    coordinator._prune_silent_adverts = lambda now: BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
+    BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
+    # Over quota, the sources past the cap go like any other device; within the cap they are exempt.
+    assert set(coordinator.devices) == {"aaaa_1_1", "aa:aa:aa:aa:aa:00", "aa:aa:aa:aa:aa:01", "aa:aa:aa:aa:aa:04"}

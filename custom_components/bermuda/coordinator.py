@@ -96,6 +96,7 @@ from .const import (
     METADEVICE_TYPE_FINDMY_SOURCE,
     METADEVICE_TYPE_IBEACON_SOURCE,
     METADEVICE_TYPE_PRIVATE_BLE_SOURCE,
+    PRUNE_MAX_BEACON_SOURCES,
     PRUNE_MAX_COUNT,
     PRUNE_TIME_ADVERT,
     PRUNE_TIME_DEFAULT,
@@ -143,6 +144,20 @@ GATHER_STAMP_MARGIN = 0.5
 # refreshing a proxy's sw_version on reconnect, a label, a configuration
 # URL) used to force every scanner to be re-resolved on the next cycle.
 DEVREG_CHANGES_OF_INTEREST = frozenset({"area_id", "name", "name_by_user", "connections", "identifiers", "disabled_by"})
+
+
+def _quota_exempt_sources(metadevice) -> list[str]:
+    """
+    The sources prune_devices may keep outside the device quota.
+
+    All of them, except for an iBeacon nobody tracks: only its newest few, or
+    one identity sent from a stream of fresh MACs would grow devices unchecked
+    for 16 minutes. The rest are left to the ordinary sweep, with its tracking
+    checks and the quota.
+    """
+    if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor:
+        return metadevice.metadevice_sources[:PRUNE_MAX_BEACON_SOURCES]
+    return metadevice.metadevice_sources
 
 
 class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
@@ -1073,7 +1088,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 # This covers static iBeacon sources, and possibly IRKs that might exceed
                 # the spec lifetime but are going stale because they're away for a bit.
                 _first = True
-                for address in metadevice.metadevice_sources:
+                for address in _quota_exempt_sources(metadevice):
                     if _device := self._get_device(address):
                         if _first or _device.last_seen > stamp_known_irk:
                             # The source has been seen within the spec's limits, keep it.
@@ -2218,9 +2233,11 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 elif len(address) == 17:
                     for altmac in mac_explode_formats(address):
                         self.redactions[altmac] = f"{address[:2]}::CFG_MAC_{i}::{address[-2:]}"
+                elif len(address) == 32:  # an IRK (hex): never echo more than a short prefix
+                    self.redactions[address] = f"{address[:4]}::CFG_IRK_{i}"
                 else:
-                    # Don't know what it is, but not a mac.
-                    self.redactions[address] = f"CFG_OTHER_{i}_{address}"
+                    # Don't know what it is, but not a mac. Never echo it back.
+                    self.redactions[address] = f"CFG_OTHER_{i}"
         _LOGGER.debug("Redact confdevs: %ss, %d items", monotonic_time_coarse() - _stamp, len(self.redactions))
         # EVERYTHING ELSE
         for non_lower_address, device in self.devices.items():
@@ -2244,7 +2261,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                         self.redactions[altmac] = f"{address[:2]}::OTHER_MAC_{i}::{address[-2:]}"
                 else:
                     # Don't know what it is.
-                    self.redactions[address] = f"OTHER_{i}_{address}"
+                    self.redactions[address] = f"OTHER_{i}"
         _LOGGER.debug("Redact therest: %ss, %d items", monotonic_time_coarse() - _stamp, len(self.redactions))
         _elapsed = monotonic_time_coarse() - _stamp
         if _elapsed > 0.5:
