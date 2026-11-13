@@ -96,6 +96,7 @@ from .const import (
     METADEVICE_TYPE_FINDMY_SOURCE,
     METADEVICE_TYPE_IBEACON_SOURCE,
     METADEVICE_TYPE_PRIVATE_BLE_SOURCE,
+    PRUNE_MAX_BEACON_SOURCES,
     PRUNE_MAX_COUNT,
     PRUNE_TIME_ADVERT,
     PRUNE_TIME_DEFAULT,
@@ -1073,12 +1074,21 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 # This covers static iBeacon sources, and possibly IRKs that might exceed
                 # the spec lifetime but are going stale because they're away for a bit.
                 _first = True
+                # Keepers sit outside the device quota, so a beacon nobody tracks
+                # holds only a few: one identity sent from a stream of fresh
+                # MACs would otherwise grow devices unchecked for 16 minutes.
+                _spare = (
+                    PRUNE_MAX_BEACON_SOURCES
+                    if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor
+                    else len(metadevice.metadevice_sources)
+                )
                 for address in metadevice.metadevice_sources:
                     if _device := self._get_device(address):
-                        if _first or _device.last_seen > stamp_known_irk:
+                        if _first or (_device.last_seen > stamp_known_irk and _spare > 0):
                             # The source has been seen within the spec's limits, keep it.
                             metadevice_source_keepers.add(address)
                             _first = False
+                            _spare -= 1
                         else:
                             # It's too old to be an IRK, and otherwise we'll auto-detect it,
                             # so let's be rid of it.
