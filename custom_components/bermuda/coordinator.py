@@ -146,6 +146,20 @@ GATHER_STAMP_MARGIN = 0.5
 DEVREG_CHANGES_OF_INTEREST = frozenset({"area_id", "name", "name_by_user", "connections", "identifiers", "disabled_by"})
 
 
+def _quota_exempt_sources(metadevice) -> list[str]:
+    """
+    The sources prune_devices may keep outside the device quota.
+
+    All of them, except for an iBeacon nobody tracks: only its newest few, or
+    one identity sent from a stream of fresh MACs would grow devices unchecked
+    for 16 minutes. The rest are left to the ordinary sweep, with its tracking
+    checks and the quota.
+    """
+    if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor:
+        return metadevice.metadevice_sources[:PRUNE_MAX_BEACON_SOURCES]
+    return metadevice.metadevice_sources
+
+
 class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     """
     Class to manage fetching data from the Bluetooth component.
@@ -1074,21 +1088,12 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 # This covers static iBeacon sources, and possibly IRKs that might exceed
                 # the spec lifetime but are going stale because they're away for a bit.
                 _first = True
-                # Keepers sit outside the device quota, so a beacon nobody tracks
-                # holds only a few: one identity sent from a stream of fresh
-                # MACs would otherwise grow devices unchecked for 16 minutes.
-                _spare = (
-                    PRUNE_MAX_BEACON_SOURCES
-                    if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor
-                    else len(metadevice.metadevice_sources)
-                )
-                for address in metadevice.metadevice_sources:
+                for address in _quota_exempt_sources(metadevice):
                     if _device := self._get_device(address):
-                        if _first or (_device.last_seen > stamp_known_irk and _spare > 0):
+                        if _first or _device.last_seen > stamp_known_irk:
                             # The source has been seen within the spec's limits, keep it.
                             metadevice_source_keepers.add(address)
                             _first = False
-                            _spare -= 1
                         else:
                             # It's too old to be an IRK, and otherwise we'll auto-detect it,
                             # so let's be rid of it.
