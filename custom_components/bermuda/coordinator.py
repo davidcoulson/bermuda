@@ -1039,12 +1039,18 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         # ever heard (a shop, a neighbour, a passing car) stayed in devices and
         # metadevices for good. Once the metadevice is gone its source is an
         # ordinary stale MAC and the sweep below prunes it.
+        # Over quota, the oldest untracked beacons go too, so a transmitter cycling
+        # identities cannot grow state for a day.
+        untracked_beacons = sorted(
+            (metadevice.last_seen or 0, address)
+            for address, metadevice in self.metadevices.items()
+            if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor
+        )
+        beacon_shortfall = len(self.devices) - PRUNE_MAX_COUNT
         stale_beacons = [
             address
-            for address, metadevice in self.metadevices.items()
-            if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type
-            and not metadevice.create_sensor
-            and (metadevice.last_seen or 0) < nowstamp - PRUNE_TIME_DEFAULT
+            for index, (last_seen, address) in enumerate(untracked_beacons)
+            if last_seen < nowstamp - PRUNE_TIME_DEFAULT or index < beacon_shortfall
         ]
         for address in stale_beacons:
             _LOGGER.debug("Pruning stale untracked iBeacon %s", address)

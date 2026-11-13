@@ -44,3 +44,25 @@ def test_stale_untracked_ibeacons_are_pruned():
     BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
     assert set(coordinator.metadevices) == {"bbbb_1_1", "cccc_1_1"}
     assert "aaaa_1_1" not in coordinator.devices
+
+
+def test_untracked_ibeacons_are_evicted_oldest_first_over_quota(monkeypatch):
+    monkeypatch.setattr("custom_components.bermuda.coordinator.PRUNE_MAX_COUNT", 2)
+    now = monotonic_time_coarse()
+    oldest = _beacon("aaaa_1_1", now - 30)
+    newer = _beacon("bbbb_1_1", now - 10)
+    tracked = _beacon("cccc_1_1", now - 100, tracked=True)
+    devices = {d.address: d for d in (oldest, newer, tracked)}
+    coordinator = SimpleNamespace(
+        stamp_last_prune=0,
+        stamp_redactions_expiry=None,
+        redactions={},
+        irk_manager=SimpleNamespace(async_prune=lambda: None),
+        metadevices=dict(devices),
+        devices=dict(devices),
+        scanner_list=[],
+        _get_device=lambda address: None,
+    )
+    coordinator._prune_silent_adverts = lambda now: BermudaDataUpdateCoordinator._prune_silent_adverts(coordinator, now)
+    BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
+    assert set(coordinator.metadevices) == {"bbbb_1_1", "cccc_1_1"}
