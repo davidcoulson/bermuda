@@ -248,6 +248,11 @@ class BermudaAdvert:
 
             self.stamp = new_stamp or 0
             self.hist_stamp.insert(0, self.stamp)
+            # calculate_data() only runs for tracked devices; bound the lists here too.
+            del self.hist_rssi[HIST_RSSI_KEEP_COUNT:]
+            del self.hist_stamp[HIST_RSSI_KEEP_COUNT:]
+            del self.hist_interval[HIST_KEEP_COUNT:]
+            del self.hist_distance[HIST_KEEP_COUNT:]
 
         # if self.tx_power is not None and scandata.advertisement.tx_power != self.tx_power:
         #     # Not really an erorr, we just don't account for this happening -

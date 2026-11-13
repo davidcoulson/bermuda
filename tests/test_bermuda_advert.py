@@ -196,3 +196,16 @@ def test_raw_history_is_kept_longer_than_the_distance_history(bermuda_advert):
     assert advert.hist_rssi == list(range(-40, -40 - HIST_RSSI_KEEP_COUNT, -1))
     assert len(advert.hist_stamp) == HIST_RSSI_KEEP_COUNT
     assert len(advert.hist_distance) == len(advert.hist_velocity) == HIST_KEEP_COUNT
+
+
+def test_update_advertisement_bounds_history_without_calculate_data(bermuda_advert, mock_advertisement_data):
+    """Untracked devices never reach calculate_data(), so the insert site must trim."""
+    from custom_components.bermuda.const import HIST_KEEP_COUNT, HIST_RSSI_KEEP_COUNT
+
+    advert = bermuda_advert
+    advert.scanner_sends_stamps = False  # a changed rssi counts as a new reading
+    for i in range(HIST_RSSI_KEEP_COUNT * 3):
+        mock_advertisement_data.rssi = -50 - i
+        advert.update_advertisement(mock_advertisement_data, advert.scanner_device)
+    assert len(advert.hist_rssi) == len(advert.hist_stamp) == HIST_RSSI_KEEP_COUNT
+    assert len(advert.hist_interval) == len(advert.hist_distance) == HIST_KEEP_COUNT

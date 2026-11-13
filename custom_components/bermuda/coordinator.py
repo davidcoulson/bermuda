@@ -1039,17 +1039,32 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         # ever heard (a shop, a neighbour, a passing car) stayed in devices and
         # metadevices for good. Once the metadevice is gone its source is an
         # ordinary stale MAC and the sweep below prunes it.
+        # Past a quarter of the quota, the oldest untracked beacons go too, so a
+        # transmitter cycling identities cannot grow state for a day. Counted on
+        # the beacons alone: a house over quota on ordinary MACs must not lose
+        # the real beacons a consumer reads through the snapshot API.
+        untracked_beacons = sorted(
+            (metadevice.last_seen or 0, address)
+            for address, metadevice in self.metadevices.items()
+            if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type and not metadevice.create_sensor
+        )
+        beacon_shortfall = len(untracked_beacons) - PRUNE_MAX_COUNT // 4
         stale_beacons = [
             address
-            for address, metadevice in self.metadevices.items()
-            if METADEVICE_IBEACON_DEVICE in metadevice.metadevice_type
-            and not metadevice.create_sensor
-            and (metadevice.last_seen or 0) < nowstamp - PRUNE_TIME_DEFAULT
+            for index, (last_seen, address) in enumerate(untracked_beacons)
+            if last_seen < nowstamp - PRUNE_TIME_DEFAULT or index < beacon_shortfall
         ]
         for address in stale_beacons:
             _LOGGER.debug("Pruning stale untracked iBeacon %s", address)
-            del self.metadevices[address]
+            evicted = self.metadevices.pop(address)
             self.devices.pop(address, None)
+            # A source still advertising the same payload never re-registers
+            # (update_advertisement only re-matches on changed manufacturer
+            # data), so its device goes too and the next advert starts afresh.
+            for source in evicted.metadevice_sources:
+                device = self.devices.get(source)
+                if device is not None and not device.is_scanner and not device.create_sensor:
+                    prune_list.append(source)
 
         metadevice_source_keepers = set()
         for metadevice in self.metadevices.values():
