@@ -47,7 +47,7 @@ def test_stale_untracked_ibeacons_are_pruned():
 
 
 def test_untracked_ibeacons_are_evicted_oldest_first_over_quota(monkeypatch):
-    monkeypatch.setattr("custom_components.bermuda.coordinator.PRUNE_MAX_COUNT", 2)
+    monkeypatch.setattr("custom_components.bermuda.coordinator.PRUNE_MAX_COUNT", 4)  # a cap of one untracked beacon
     now = monotonic_time_coarse()
     oldest = _beacon("aaaa_1_1", now - 30)
     newer = _beacon("bbbb_1_1", now - 10)
