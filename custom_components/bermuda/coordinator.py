@@ -1056,8 +1056,15 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         ]
         for address in stale_beacons:
             _LOGGER.debug("Pruning stale untracked iBeacon %s", address)
-            del self.metadevices[address]
+            evicted = self.metadevices.pop(address)
             self.devices.pop(address, None)
+            # A source still advertising the same payload never re-registers
+            # (update_advertisement only re-matches on changed manufacturer
+            # data), so its device goes too and the next advert starts afresh.
+            for source in evicted.metadevice_sources:
+                device = self.devices.get(source)
+                if device is not None and not device.is_scanner and not device.create_sensor:
+                    prune_list.append(source)
 
         metadevice_source_keepers = set()
         for metadevice in self.metadevices.values():
