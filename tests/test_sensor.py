@@ -27,6 +27,7 @@ def _fake_scanner(address, *, is_remote_scanner=False, address_wifi_mac=None):
         address=address,
         is_remote_scanner=is_remote_scanner,
         address_wifi_mac=address_wifi_mac,
+        scanner_awaits_wifi_mac=bool(is_remote_scanner and address_wifi_mac is None),
     )
 
 

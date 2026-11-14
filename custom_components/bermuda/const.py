@@ -178,6 +178,7 @@ PRUNE_TIME_INTERVAL = 180  # Every 3m, prune stale devices
 # timeouts below that may result in prune/create/prune churn, but as long as
 # we only re-create *fresh* devices the risk is low.
 PRUNE_TIME_DEFAULT = 86400  # Max age of regular device entries (1day)
+SCANNER_WIFI_MAC_WAIT = 300  # s a remote scanner may wait for its integration device before it is keyed by address
 PRUNE_TIME_UNKNOWN_IRK = 240  # Resolvable Private addresses change often, prune regularly.
 # see Bluetooth Core Spec, Vol3, Part C, Appendix A, Table A.1: Defined GAP timers
 PRUNE_TIME_KNOWN_IRK: Final[int] = 16 * 60  # spec "recommends" 15 min max address age. Round up to 16 :-)

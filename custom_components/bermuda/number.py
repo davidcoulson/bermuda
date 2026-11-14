@@ -82,7 +82,7 @@ async def async_setup_entry(
             # Wait until a remote scanner has its wifi mac so the control attaches
             # to the correct device. Skip (not bail) so other ready scanners are
             # still created now; this is retried as scanners become ready.
-            if scanner.is_remote_scanner and scanner.address_wifi_mac is None:
+            if scanner.scanner_awaits_wifi_mac:
                 continue
             entities.append(BermudaScannerMaxRadius(coordinator, entry, scanner.address))
             created_scanners.add(scanner.address)
