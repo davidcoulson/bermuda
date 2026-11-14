@@ -701,3 +701,24 @@ async def test_a_shared_real_advert_gets_one_history_entry_per_cycle(hass):
         source.calculate_data()
         metadevice.calculate_data()
         assert len(advert.hist_distance_by_interval) == 1 + cycle
+
+
+def test_irk_device_is_seeded_from_the_sighting_core_already_holds(mock_coordinator):
+    """After a restart core only calls back on the next delivered advert, which
+    can be minutes away for a phone whose payload has not changed. A new IRK
+    device takes the current address core already knows."""
+    info = MagicMock()
+    info.address = "4A:BB:CC:DD:EE:FF"
+    with (
+        patch("custom_components.bermuda.bermuda_device.pble_coordinator") as pble,
+    ):
+        pble.async_last_service_info.return_value = info
+        device = BermudaDevice(address="0123456789abcdef0123456789abcdef", coordinator=mock_coordinator)
+    assert device.metadevice_sources == ["4a:bb:cc:dd:ee:ff"]
+
+
+def test_irk_device_with_nothing_heard_yet_starts_empty(mock_coordinator):
+    with patch("custom_components.bermuda.bermuda_device.pble_coordinator") as pble:
+        pble.async_last_service_info.return_value = None
+        device = BermudaDevice(address="0123456789abcdef0123456789abcdef", coordinator=mock_coordinator)
+    assert device.metadevice_sources == []
