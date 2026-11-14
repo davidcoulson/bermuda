@@ -233,3 +233,30 @@ async def test_calibration2_duplicate_scanner_names_keep_offsets_independent(has
 
     assert result == {"saved": True}
     assert handler.options[CONF_RSSI_OFFSETS] == dict(zip(addresses, [1, 2, 3], strict=True))
+
+
+async def test_calibration2_save_survives_an_area_change_while_the_form_is_open(hass: HomeAssistant):
+    """Labels are fixed when the form is built: a scanner changing area must not break the save."""
+    addresses = ["aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"]
+    scanners = {
+        addresses[0]: SimpleNamespace(name="Hallway", area_name="Entry"),
+        addresses[1]: SimpleNamespace(name="Hallway", area_name="Office"),
+    }
+    handler = object.__new__(BermudaOptionsFlowHandler)
+    handler.coordinator = SimpleNamespace(scanner_list=addresses, devices=scanners)
+    handler._options = {}
+
+    labels = handler._calibration_labels()  # as shown on the open form
+    scanners[addresses[0]].area_name = "Kitchen"  # moved in the registry meanwhile
+
+    with patch.object(BermudaOptionsFlowHandler, "_update_options", new=AsyncMock(return_value={"saved": True})):
+        result = await handler.async_step_calibration2_scanners(
+            user_input={
+                CONF_DEVICES: "device-registry-id",
+                CONF_SCANNER_INFO: {labels[addresses[0]]: 4, labels[addresses[1]]: 5},
+                CONF_SAVE_AND_CLOSE: True,
+            }
+        )
+
+    assert result == {"saved": True}
+    assert handler.options[CONF_RSSI_OFFSETS] == dict(zip(addresses, [4, 5], strict=True))

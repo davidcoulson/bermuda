@@ -61,7 +61,7 @@ from .const import (
     TILE_SERVICE_UUIDS,
 )
 from .device_family import identify as identify_family
-from .util import mac_math_offset, mac_norm
+from .util import mac_math_offset_carry, mac_norm
 from .util import mac_octet_offset as _mac_octet_offset
 
 # Integrations that provide Bluetooth scanners. When two registry entries
@@ -413,7 +413,7 @@ class BermudaDevice:
         # range of possible addresses, and see what we find in the device registry,
         # on the *assumption* that there won't be overlap between devices.
         for offset in range(-3, 3):
-            if (altmac := mac_math_offset(self.address, offset)) is not None:
+            if (altmac := mac_math_offset_carry(self.address, offset)) is not None:
                 connlist.add(("bluetooth", altmac.upper()))
                 connlist.add(("mac", altmac))
                 maclist.add(altmac)
@@ -560,8 +560,8 @@ class BermudaDevice:
         # 'em all in and let the loop sort it out.
         for mac in (
             self.address_ble_mac,  # BLE mac, if known
-            mac_math_offset(self.address_wifi_mac, 2),  # WIFI+2=BLE
-            mac_math_offset(self.address_wifi_mac, -1),  # ETHER-1=BLE
+            mac_math_offset_carry(self.address_wifi_mac, 2),  # WIFI+2=BLE
+            mac_math_offset_carry(self.address_wifi_mac, -1),  # ETHER-1=BLE
         ):
             if (
                 mac is not None

@@ -572,7 +572,7 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             if user_input[CONF_SAVE_AND_CLOSE]:
                 # Convert the name-based dict to use MAC addresses
                 rssi_offset_by_address = {}
-                scanner_labels = self._scanner_display_labels()
+                scanner_labels = self._calibration_labels()
                 for address in self.coordinator.scanner_list:
                     scanner_label = scanner_labels[address]
                     val = user_input[CONF_SCANNER_INFO][scanner_label]
@@ -598,7 +598,7 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
 
         saved_rssi_offsets = self.options.get(CONF_RSSI_OFFSETS, {})
         rssi_offset_dict = {}
-        scanner_labels = self._scanner_display_labels()
+        scanner_labels = self._calibration_labels()
 
         # Sorted by name so the list is stable and a given scanner is easy to find.
         for scanner in self._scanner_addresses_by_name():
@@ -667,6 +667,18 @@ class BermudaOptionsFlowHandler(OptionsFlowWithConfigEntry):
             self.coordinator.scanner_list,
             key=lambda address: str(self.coordinator.devices[address].name).casefold(),
         )
+
+    def _calibration_labels(self) -> dict[str, str]:
+        """
+        Labels for the calibration form, kept for the life of the flow.
+
+        The submitted form is keyed by these labels, so they must not change
+        when a scanner's area does while the form is open (that raised KeyError on save).
+        """
+        stored = getattr(self, "_stored_labels", None)
+        if stored is None or set(stored) != set(self.coordinator.scanner_list):
+            stored = self._stored_labels = self._scanner_display_labels()
+        return stored
 
     def _scanner_display_labels(self) -> dict[str, str]:
         """Return unique names for scanner fields in the calibration form."""
