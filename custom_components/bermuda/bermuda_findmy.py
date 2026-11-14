@@ -562,6 +562,12 @@ class BermudaFindMyManager:
         self._accessories: dict[str, FindMyAccessoryKeys] = {}
         self._table = _TableState()
         self._dirty = True
+        # What the last build made of each accessory: (the accessory, the
+        # alignment index it was built at, its addresses). A sighting moves one
+        # accessory's index, and only that accessory is derived again; the rest,
+        # the sweep chunks of the lost ones above all, wait for the interval.
+        self._built: dict[str, tuple[FindMyAccessoryKeys, int, dict[str, tuple[str, int, str]]]] = {}
+        self._full_at: datetime | None = None
 
     @property
     def accessories(self) -> dict[str, FindMyAccessoryKeys]:
@@ -615,14 +621,20 @@ class BermudaFindMyManager:
         if self._dirty or self._table.built_at is None:
             return True
         now = now or datetime.now(UTC)
-        return now - self._table.built_at >= FINDMY_KEY_INTERVAL
+        # Measured from the last FULL build: the partial ones a sighting causes
+        # must not put off rolling every window forward.
+        return self._full_at is None or now - self._full_at >= FINDMY_KEY_INTERVAL
 
     def build_table(self, now: datetime | None = None) -> dict[str, FindMyMacMatch]:
         """
         Rebuild the MAC lookup table.
 
         This is the expensive call - one elliptic curve operation per candidate
-        index - so it belongs in an executor, and is only run once per key interval.
+        index - so it belongs in an executor. Every accessory is derived once
+        per key interval; a build in between (a sighting moved an index, or an
+        accessory was added) derives only the accessories that changed and
+        keeps the others' addresses as they were. Before, each of a dozen tags
+        rotating its key cost a sweep chunk for every lost one.
         """
         now = now or datetime.now(UTC)
         # Clear the flag first, and iterate a snapshot. This runs in an executor
@@ -632,13 +644,25 @@ class BermudaFindMyManager:
         # arrived mid-build, hiding it until the next interval.
         self._dirty = False
         accessories = list(self._accessories.values())
-        macs: dict[str, FindMyMacMatch] = {}
+        full = self._full_at is None or now - self._full_at >= FINDMY_KEY_INTERVAL
+        built: dict[str, tuple[FindMyAccessoryKeys, int, dict[str, tuple[str, int, str]]]] = {}
+        table: dict[str, tuple[str, int, str]] = {}
         for accessory in accessories:
-            macs.update(accessory.macs_for_window(now))
-        self._table = _TableState(
-            macs={mac: (m.accessory_id, m.index, m.key_type) for mac, m in macs.items()},
-            built_at=now,
-        )
+            # Read before deriving: a sighting that lands mid-build then shows
+            # as a moved index at the next one.
+            index = accessory.alignment_index
+            kept = None if full else self._built.get(accessory.address)
+            if kept is not None and kept[0] is accessory and kept[1] == index:
+                own = kept[2]
+            else:
+                own = {mac: (m.accessory_id, m.index, m.key_type) for mac, m in accessory.macs_for_window(now).items()}
+            built[accessory.address] = (accessory, index, own)
+            table.update(own)
+        self._built = built
+        if full:
+            self._full_at = now
+        self._table = _TableState(macs=table, built_at=now)
+        macs = {mac: FindMyMacMatch(*entry) for mac, entry in table.items()}
         _LOGGER.debug(
             "FindMy MAC table rebuilt: %d addresses across %d accessories",
             len(macs),
