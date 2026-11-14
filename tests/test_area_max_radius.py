@@ -112,3 +112,32 @@ def test_zero_max_radius_can_win_within_global_limit():
     device, selected = _device({"near": near, "far": far})
     BermudaDataUpdateCoordinator._refresh_area_by_min_distance(_coordinator(global_max_radius=10.0), device)
     assert selected == [far]
+
+
+def _held(adverts, incumbent):
+    device, selected = _device(adverts)
+    device.area_advert = incumbent
+    return device, selected
+
+
+def test_incumbent_beyond_its_own_max_radius_is_released():
+    """Upstream 886: a scanner that cannot win beyond its radius must not hold the area either."""
+    held = _advert("held proxy", "area_held", distance=2.0, scanner_max_radius=1.0)
+    device, selected = _held({"held": held}, held)
+    BermudaDataUpdateCoordinator._refresh_area_by_min_distance(_coordinator(), device)
+    assert selected == [None]
+
+
+def test_incumbent_beyond_its_radius_is_replaced_by_one_in_range():
+    held = _advert("held proxy", "area_held", distance=2.0, scanner_max_radius=1.0)
+    near = _advert("near proxy", "area_near", distance=3.0)
+    device, selected = _held({"held": held, "near": near}, held)
+    BermudaDataUpdateCoordinator._refresh_area_by_min_distance(_coordinator(), device)
+    assert selected == [near]
+
+
+def test_incumbent_beyond_global_radius_is_released():
+    held = _advert("held proxy", "area_held", distance=6.0)
+    device, selected = _held({"held": held}, held)
+    BermudaDataUpdateCoordinator._refresh_area_by_min_distance(_coordinator(global_max_radius=4.0), device)
+    assert selected == [None]

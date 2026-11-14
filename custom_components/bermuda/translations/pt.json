@@ -72,7 +72,7 @@
       },
       "calibration2_scanners": {
         "title": "Calibração 2: Compensações por Scanner",
-        "description": "Este passo é opcional, mas útil se os seus scanners tiverem sensibilidades ou desempenhos de antena diferentes. Ajuste a compensação RSSI para cada scanner até que a distância calculada para o dispositivo selecionado esteja correta.",
+        "description": "Este passo é opcional, mas útil se os seus scanners tiverem sensibilidades ou desempenhos de antena diferentes. Ajuste a compensação RSSI para cada scanner até que a distância calculada para o dispositivo selecionado esteja correta.\n\n{suffix}",
         "data": {
           "configured_devices": "Dispositivo",
           "save_and_close": "Salvar e Fechar",

@@ -1837,6 +1837,16 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         _max_radius = self.options.get(CONF_MAX_RADIUS, DEFAULT_MAX_RADIUS)
         nowstamp = monotonic_time_coarse()
 
+        # A scanner that cannot win a contest beyond its max radius must not hold one either
+        # (upstream issue 886): drop an incumbent that has drifted past its own radius, so it
+        # is replaced by any scanner in range or the area is cleared.
+        if (
+            incumbent is not None
+            and incumbent.rssi_distance is not None
+            and incumbent.rssi_distance > (incumbent.scanner_device.max_radius or _max_radius)
+        ):
+            incumbent = None
+
         tests = self.AreaTests()
         tests.device = device.name
 
