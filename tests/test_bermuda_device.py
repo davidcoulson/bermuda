@@ -722,3 +722,20 @@ def test_irk_device_with_nothing_heard_yet_starts_empty(mock_coordinator):
         pble.async_last_service_info.return_value = None
         device = BermudaDevice(address="0123456789abcdef0123456789abcdef", coordinator=mock_coordinator)
     assert device.metadevice_sources == []
+
+
+def test_scanner_known_only_to_bluetooth_stops_waiting_for_a_wifi_mac(mock_coordinator):
+    """An Android app proxy has a bluetooth device entry but never an integration one;
+    after the grace it must be ready, or it never gets its distance entities (issue 25)."""
+    from custom_components.bermuda.const import SCANNER_WIFI_MAC_WAIT
+
+    scanner = BermudaDevice(address="96:bb:cc:dd:ee:ad", coordinator=mock_coordinator)
+    scanner._is_remote_scanner = True
+    scanner.entry_id = "bt-entry"
+    assert scanner.scanner_awaits_wifi_mac  # just created: may still resolve
+    scanner._created -= SCANNER_WIFI_MAC_WAIT + 1
+    assert not scanner.scanner_awaits_wifi_mac
+    scanner.entry_id = None  # nothing in the registry at all: keep waiting
+    assert scanner.scanner_awaits_wifi_mac
+    scanner.address_wifi_mac = "aa:bb:cc:dd:ee:ff"
+    assert not scanner.scanner_awaits_wifi_mac

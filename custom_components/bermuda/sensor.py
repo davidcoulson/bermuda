@@ -119,7 +119,7 @@ async def async_setup_entry(
             scanner.address
             for scanner in coordinator.get_scanners
             if scanner.is_remote_scanner is None  # usb/HCI scanner's are fine.
-            or (scanner.is_remote_scanner and scanner.address_wifi_mac is None)
+            or scanner.scanner_awaits_wifi_mac
         }
 
         # These are the O(devices x scanners) entities: one registry row per pair,

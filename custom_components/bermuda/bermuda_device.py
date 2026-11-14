@@ -55,6 +55,7 @@ from .const import (
     METADEVICE_PRIVATE_BLE_DEVICE,
     METADEVICE_TILE_DEVICE,
     METADEVICE_TYPE_IBEACON_SOURCE,
+    SCANNER_WIFI_MAC_WAIT,
     TILE_METADEVICE_PREFIX,
     TILE_REF_POWER,
     TILE_SERVICE_UUIDS,
@@ -102,6 +103,7 @@ class BermudaDevice:
         self.address: Final[str] = _address
         self.address_ble_mac: str = _address
         self.address_wifi_mac: str | None = None
+        self._created: float = monotonic_time_coarse()
         # We use a weakref to avoid any possible GC issues (only likely if we add a __del__ method, but *shrug*)
         self._coordinator: BermudaDataUpdateCoordinator = coordinator
         self.ref_power: float = 0  # If non-zero, use in place of global ref_power.
@@ -358,6 +360,19 @@ class BermudaDevice:
             if getattr(entry, "domain", None) in SCANNER_DOMAINS:
                 return True
         return False
+
+    @property
+    def scanner_awaits_wifi_mac(self) -> bool:
+        """
+        True while a remote scanner may still gain its integration device (and wifi mac).
+
+        Entities wait for it so their unique_id does not change later. A scanner known only
+        to the bluetooth integration (an Android app acting as a proxy) never gets one, so
+        after a short grace it counts as ready and is keyed by its own address.
+        """
+        if not self.is_remote_scanner or self.address_wifi_mac is not None:
+            return False
+        return self.entry_id is None or monotonic_time_coarse() - self._created < SCANNER_WIFI_MAC_WAIT
 
     def async_as_scanner_resolve_device_entries(self):
         """From the known MAC address, resolve any relevant device entries and names etc."""
