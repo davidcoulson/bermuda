@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 import pytest
 
 from custom_components.bermuda.bermuda_device import BermudaDevice
-from custom_components.bermuda.const import BDADDR_TYPE_OTHER, SIGNAL_DEVICE_NEW
+from custom_components.bermuda.const import BDADDR_TYPE_OTHER, METADEVICE_TYPE_IBEACON_SOURCE, SIGNAL_DEVICE_NEW
 from custom_components.bermuda.coordinator import BermudaDataUpdateCoordinator
 
 
@@ -533,3 +533,72 @@ def test_gather_skips_old_adverts_by_the_scanners_stamps():
     # ..:02 is stamped 99.8, inside the half-second margin for the coarse
     # clock: processed. ..:03 unstamped, ..:04 a local adaptor's.
     assert seen == ["11:11:11:11:11:02", "11:11:11:11:11:03", "11:11:11:11:11:04"]
+
+
+def _ibeacon_coordinator():
+    """A minimal coordinator whose device table behaves like _get_or_create_device's."""
+    coordinator = MagicMock()
+    coordinator.options = {}
+    coordinator.devices = {}
+    coordinator.metadevices = {}
+
+    def get_or_create(address):
+        if address not in coordinator.devices:
+            coordinator.devices[address] = BermudaDevice(address, coordinator)
+        return coordinator.devices[address]
+
+    coordinator._get_or_create_device = get_or_create
+    return coordinator
+
+
+def _ibeacon_source(coordinator, address, key, local_name=None):
+    source = BermudaDevice(address, coordinator)
+    source.metadevice_type.add(METADEVICE_TYPE_IBEACON_SOURCE)
+    source.beacon_unique_id = key
+    source.beacon_major, source.beacon_minor = 100, 40004
+    source.beacon_uuid = key.split("_")[0]
+    source.name_bt_local_name = local_name
+    return source
+
+
+def test_register_ibeacon_source_names_the_metadevice_now():
+    """A new iBeacon metadevice must not keep its bermuda_<address> placeholder name.
+
+    The name is what entity creation and the async_get_tracked_devices API
+    derive the slug from, and nothing else in an iBeacon metadevice's
+    lifecycle calls make_name: its own adverts change no name field. Until
+    this was called here, whether the placeholder was ever replaced depended
+    on which unrelated trigger fired first after a restart, and the slug
+    flipped between bermuda_<uuid_major_minor> and the resolved name from
+    one restart to the next.
+    """
+    coordinator = _ibeacon_coordinator()
+    key = f"{'ab' * 16}_100_40004"
+    source = _ibeacon_source(coordinator, "aa:bb:cc:dd:ee:ff", key)
+
+    BermudaDataUpdateCoordinator.register_ibeacon_source(coordinator, source)
+
+    metadevice = coordinator.devices[key]
+    assert metadevice.metadevice_sources == ["aa:bb:cc:dd:ee:ff"]
+    assert metadevice.name == key, "the placeholder bermuda_ name must be resolved on creation"
+
+
+def test_register_ibeacon_source_upgrades_the_name_when_a_source_brings_one():
+    """A later source carrying a local name must re-resolve the metadevice's name.
+
+    The source that created the metadevice may advertise no name at all; a
+    later source (the beacon cycling to a new MAC, say) can bring the first
+    name fields the metadevice has ever had."""
+    coordinator = _ibeacon_coordinator()
+    key = f"{'ab' * 16}_100_40004"
+    BermudaDataUpdateCoordinator.register_ibeacon_source(
+        coordinator, _ibeacon_source(coordinator, "aa:bb:cc:dd:ee:ff", key)
+    )
+    metadevice = coordinator.devices[key]
+    assert metadevice.name == key  # no name anywhere: the beacon id names it
+
+    BermudaDataUpdateCoordinator.register_ibeacon_source(
+        coordinator, _ibeacon_source(coordinator, "11:22:33:44:55:66", key, local_name="Emilie beacon")
+    )
+
+    assert metadevice.name == "Emilie beacon", "a new source's local name must apply"
