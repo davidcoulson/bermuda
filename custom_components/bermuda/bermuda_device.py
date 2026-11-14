@@ -448,6 +448,10 @@ class BermudaDevice:
         bt_candidates: list[tuple[int, int, Any, str]] = []
         mac_candidates: list[tuple[int, int, int, Any, str]] = []
         for devreg_device in devreg_devices:
+            # Bermuda's own device for this scanner shares its MACs but never carries the
+            # user's area or name, and was winning ties against the real entry.
+            if any(ident[0] == DOMAIN for ident in getattr(devreg_device, "identifiers", None) or ()):
+                continue
             devreg_count += 1
             # _LOGGER.debug("DevregScanner: %s", devreg_device)
             devreg_stringlist += f"** {devreg_device.name_by_user or devreg_device.name}\n"

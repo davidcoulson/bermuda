@@ -739,3 +739,26 @@ def test_scanner_known_only_to_bluetooth_stops_waiting_for_a_wifi_mac(mock_coord
     assert scanner.scanner_awaits_wifi_mac
     scanner.address_wifi_mac = "aa:bb:cc:dd:ee:ff"
     assert not scanner.scanner_awaits_wifi_mac
+
+
+def test_scanner_registry_match_ignores_bermudas_own_device(mock_coordinator, mock_remote_scanner):
+    """Bermuda's own entry for a scanner (same bluetooth MAC, no area) must not beat the real one."""
+    from types import SimpleNamespace
+
+    def dev(id_, area, identifiers):
+        return SimpleNamespace(
+            id=id_,
+            name=id_,
+            name_by_user=None,
+            area_id=area,
+            identifiers=identifiers,
+            connections={("bluetooth", "96:D2:D2:FD:84:B6")},
+        )
+
+    own = dev("own", None, {("bermuda", "96:d2:d2:fd:84:b6")})
+    real = dev("real", "laundry", set())
+    mock_coordinator.dr.async_get_devices = MagicMock(return_value=[own, real])
+    scanner = BermudaDevice(address="96:d2:d2:fd:84:b6", coordinator=mock_coordinator)
+    scanner._hascanner = mock_remote_scanner
+    scanner.async_as_scanner_resolve_device_entries()
+    assert scanner.entry_id == "real"
