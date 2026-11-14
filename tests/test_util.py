@@ -54,3 +54,12 @@ def test_rssi_to_metres():
 def test_clean_charbuf():
     assert util.clean_charbuf("a Normal string.") == "a Normal string."
     assert util.clean_charbuf("Broken\000String\000Fixed\000\000\000") == "Broken"
+
+
+def test_mac_math_offset_carry():
+    assert util.mac_math_offset_carry("aa:bb:cc:dd:ef:00", -2) == "aa:bb:cc:dd:ee:fe"
+    assert util.mac_math_offset_carry("aa:bb:cc:dd:ee:ff", 2) == "aa:bb:cc:dd:ef:01"
+    assert util.mac_math_offset_carry("aa:bb:cc:dd:ee:ef", 2) == "aa:bb:cc:dd:ee:f1"
+    assert util.mac_math_offset_carry("ff:ff:ff:ff:ff:ff", 1) is None
+    assert util.mac_math_offset_carry("clearly_not:a-mac_address", 2) is None
+    assert util.mac_math_offset_carry(None, 4) is None

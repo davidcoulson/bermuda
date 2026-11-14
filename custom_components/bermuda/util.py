@@ -31,6 +31,24 @@ def mac_math_offset(mac, offset=0) -> str | None:
     return None
 
 
+def mac_math_offset_carry(mac, offset=0) -> str | None:
+    """
+    Like mac_math_offset, but the offset carries into the higher octets
+    (aa:bb:cc:dd:ef:00 - 2 = aa:bb:cc:dd:ee:fe), matching mac_octet_offset.
+    Returns None for a malformed MAC or one that would leave the 48-bit range.
+    """
+    if mac is None or len(str(mac)) != 17:
+        return None
+    try:
+        value = int(str(mac).replace(":", ""), 16) + offset
+    except ValueError:
+        return None
+    if not 0 <= value < 1 << 48:
+        return None
+    hexval = f"{value:012x}"
+    return ":".join(hexval[i : i + 2] for i in range(0, 12, 2))
+
+
 def mac_octet_offset(mac_a, mac_b) -> int | None:
     """
     Signed difference of the last octets, a - b, when the first five octets
