@@ -7,7 +7,6 @@ on:
       - main
       - master
       - dev
-      - fork-testing
   pull_request:
   schedule:
     - cron: "0 0 * * *"

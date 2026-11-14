@@ -12,7 +12,7 @@ reviews:
   auto_review:
     enabled: true
     drafts: false
-    base_branches: ["fork-testing"]
+    base_branches: ["main"]
     ignore_usernames: ["dependabot[bot]"]
   path_filters: ["!img/**"]
   path_instructions:

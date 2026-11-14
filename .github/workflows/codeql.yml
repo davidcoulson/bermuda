@@ -1,16 +1,11 @@
-# CodeQL security scanning. This is the workflow form of GitHub's default
-# setup, needed because default setup only scans the default branch (main)
-# and development here happens on fork-testing.
+# CodeQL security scanning, in workflow form.
 name: CodeQL
 
 on:
   push:
-    branches: [fork-testing]
+    branches: [main]
   pull_request:
-    branches: [fork-testing]
-  # No schedule or workflow_dispatch: GitHub starts both only from a workflow
-  # on the default branch (main), and this one lives on fork-testing. To
-  # rescan with newer CodeQL queries, re-run the latest CodeQL run.
+    branches: [main]
 
 permissions:
   contents: read
