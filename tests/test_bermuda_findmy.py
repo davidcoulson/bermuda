@@ -859,3 +859,62 @@ def test_the_lookup_table_is_tuples_the_collector_ignores() -> None:
     match = manager.check_mac(mac)
     assert isinstance(match, FindMyMacMatch)
     assert (match.accessory_id, match.index, match.key_type) == entry
+
+
+def test_a_sighting_rebuilds_only_the_accessory_it_moved(monkeypatch) -> None:
+    """
+    One tag rotating its key must not cost a sweep chunk for every lost one.
+
+    Measured on a house with a dozen tags: each rotation dirtied the table and
+    every accessory was derived again, the 2,880-index sweep of each lost tag
+    included - about fifteen full builds per key interval instead of one.
+    """
+    paired = datetime(2024, 2, 18, tzinfo=UTC)
+    now = datetime(2026, 9, 18, 16, 15, tzinfo=UTC)
+    lost = _long_paired_accessory(paired, datetime(2026, 9, 18, 12, 15, tzinfo=UTC), 69764)
+    raw = {**json.loads(ACCESSORY_JSON), "identifier": "FFFFFFFF-1111-2222-3333-444444444444"}
+    raw.update(paired_at=paired.isoformat(), alignment_date=now.isoformat(), alignment_index=69000)
+    seen = FindMyAccessoryKeys.from_json(json.dumps(raw))
+    manager = BermudaFindMyManager()
+    manager.add_accessory(lost)
+    manager.add_accessory(seen)
+
+    derived: list[str] = []
+    original = FindMyAccessoryKeys.macs_for_window
+
+    def counting(self, when=None):
+        derived.append(self.address)
+        return original(self, when)
+
+    monkeypatch.setattr(FindMyAccessoryKeys, "macs_for_window", counting)
+
+    manager.build_table(now)
+    assert sorted(derived) == sorted([lost.address, seen.address])
+    lost_mac = lost._mac_at(69764, KEY_TYPE_PRIMARY)  # noqa: SLF001
+    assert manager.check_mac(lost_mac) is not None
+
+    # The seen tag rotates: its next address is already in the window.
+    derived.clear()
+    later = now + timedelta(minutes=5)
+    match = manager.check_mac(seen._mac_at(69001, KEY_TYPE_PRIMARY))  # noqa: SLF001
+    assert match is not None
+    manager.note_sighting(match, later)
+    assert manager.needs_refresh(later) is True
+    manager.build_table(later)
+    assert derived == [seen.address], "only the accessory whose index moved is derived again"
+    assert manager.check_mac(lost_mac) is not None, "the lost tag's addresses are kept"
+    ahead = seen._mac_at(69001 + FINDMY_LOOKAHEAD_INDICES, KEY_TYPE_PRIMARY)  # noqa: SLF001
+    assert manager.check_mac(ahead) is not None, "the moved window is in the table"
+
+    # The partial build does not put off the interval's full one.
+    assert manager.needs_refresh(now + timedelta(minutes=14)) is False
+    assert manager.needs_refresh(now + timedelta(minutes=15)) is True
+    derived.clear()
+    manager.build_table(now + timedelta(minutes=15))
+    assert sorted(derived) == sorted([lost.address, seen.address])
+
+    # Re-pasted keys at the same address and index are a different accessory.
+    derived.clear()
+    manager.add_accessory(FindMyAccessoryKeys.from_json(json.dumps({**raw, "skn": "33" * 32})))
+    manager.build_table(now + timedelta(minutes=16))
+    assert derived == [seen.address]
