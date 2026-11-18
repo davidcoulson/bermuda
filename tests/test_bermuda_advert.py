@@ -209,3 +209,25 @@ def test_update_advertisement_bounds_history_without_calculate_data(bermuda_adve
         advert.update_advertisement(mock_advertisement_data, advert.scanner_device)
     assert len(advert.hist_rssi) == len(advert.hist_stamp) == HIST_RSSI_KEEP_COUNT
     assert len(advert.hist_interval) == len(advert.hist_distance) == HIST_KEEP_COUNT
+
+
+@pytest.mark.parametrize("bad_rssi", [127, 0, float("nan"), float("inf")])
+def test_update_advertisement_ignores_non_negative_rssi(
+    bermuda_advert, mock_advertisement_data, mock_scanner_device, bad_rssi
+):
+    """RSSI >= 0 is a "not available" sentinel (eg Android's 127) and must not enter history."""
+    mock_scanner_device.async_as_scanner_get_stamp.return_value = 200.0
+    mock_advertisement_data.rssi = bad_rssi
+    bermuda_advert.update_advertisement(mock_advertisement_data, mock_scanner_device)
+    assert bermuda_advert.rssi == -70
+    assert bad_rssi not in bermuda_advert.hist_rssi or bad_rssi != bad_rssi
+    assert bermuda_advert.stamp == 123.45
+
+
+def test_update_advertisement_keeps_negative_rssi(bermuda_advert, mock_advertisement_data, mock_scanner_device):
+    """A normal negative RSSI is still accepted."""
+    mock_scanner_device.async_as_scanner_get_stamp.return_value = 200.0
+    mock_advertisement_data.rssi = -60
+    bermuda_advert.update_advertisement(mock_advertisement_data, mock_scanner_device)
+    assert bermuda_advert.rssi == -60
+    assert bermuda_advert.hist_rssi[0] == -60

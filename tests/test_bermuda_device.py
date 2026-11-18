@@ -223,6 +223,7 @@ def test_process_manufacturer_data_reads_only_the_newest_entry(bermuda_device):
 def test_process_advertisement(bermuda_device, bermuda_scanner):
     """Test process_advertisement method."""
     advertisement_data = MagicMock()
+    advertisement_data.rssi = -70
     bermuda_device.process_advertisement(bermuda_scanner, advertisement_data)
     assert len(bermuda_device.adverts) == 1
 
@@ -255,6 +256,7 @@ def test_to_dict_is_json_serialisable_with_area_advert(bermuda_device, bermuda_s
     $.service_response.<device>.area_advert".
     """
     advertisement_data = MagicMock()
+    advertisement_data.rssi = -70
     bermuda_device.process_advertisement(bermuda_scanner, advertisement_data)
     advert = next(iter(bermuda_device.adverts.values()))
     bermuda_device.area_advert = advert
