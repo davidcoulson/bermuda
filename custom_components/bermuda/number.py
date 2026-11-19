@@ -205,17 +205,21 @@ class BermudaScannerMaxRadius(BermudaEntity, RestoreNumber):
         """Restore the saved radius from HA storage on startup."""
         await super().async_added_to_hass()
         self.restored_data = await self.async_get_last_number_data()
-        if self.restored_data is not None and self.restored_data.native_value is not None:
-            self.coordinator.devices[self.address].set_max_radius(self.restored_data.native_value)
+        scanner = self.coordinator.devices.get(self.address)
+        if scanner is not None and self.restored_data is not None and self.restored_data.native_value is not None:
+            scanner.set_max_radius(self.restored_data.native_value)
 
     @property
     def native_value(self) -> float | None:
         """Return the configured per-scanner max radius (metres)."""
-        return self.coordinator.devices[self.address].max_radius
+        # The proxy may have been pruned while this entity lives on.
+        scanner = self.coordinator.devices.get(self.address)
+        return scanner.max_radius if scanner is not None else None
 
     async def async_set_native_value(self, value: float) -> None:
         """Set a new per-scanner max radius."""
-        self.coordinator.devices[self.address].set_max_radius(value)
+        if (scanner := self.coordinator.devices.get(self.address)) is not None:
+            scanner.set_max_radius(value)
         self.async_write_ha_state()
 
     @property

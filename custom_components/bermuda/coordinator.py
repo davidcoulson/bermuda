@@ -1095,9 +1095,9 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                             # The source has been seen within the spec's limits, keep it.
                             metadevice_source_keepers.add(address)
                             _first = False
-                        else:
+                        elif not _device.is_scanner:
                             # It's too old to be an IRK, and otherwise we'll auto-detect it,
-                            # so let's be rid of it.
+                            # so let's be rid of it. (A proxy that also beacons stays.)
                             prune_list.append(address)
 
         for device_address, device in self.devices.items():

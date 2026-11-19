@@ -413,6 +413,49 @@ def test_prune_devices_drops_adverts_heard_by_a_pruned_scanner(monkeypatch):
     assert tag_device.area_advert is None
 
 
+def test_prune_devices_keeps_a_scanner_that_is_a_stale_metadevice_source(monkeypatch):
+    """A proxy that also beacons is a metadevice source; going stale as a source must not prune the proxy."""
+    import custom_components.bermuda.coordinator as coordinator_module
+
+    monkeypatch.setattr(coordinator_module, "monotonic_time_coarse", lambda: 5000.0)
+
+    class _Dev(SimpleNamespace):
+        def __hash__(self):
+            return hash(self.address)
+
+    fresh, proxy = "aa:bb:cc:dd:ee:01", "aa:bb:cc:dd:ee:02"
+    common = {"create_sensor": False, "address_type": BDADDR_TYPE_OTHER, "metadevice_sources": [], "adverts": {}}
+    devices = {
+        fresh: _Dev(address=fresh, name="fresh", last_seen=5000.0, is_scanner=False, **common),
+        proxy: _Dev(address=proxy, name="proxy", last_seen=0, is_scanner=True, **common),
+    }
+    metadevice = SimpleNamespace(metadevice_sources=[fresh, proxy], adverts={}, metadevice_type=set())
+    coordinator = SimpleNamespace(
+        devices=devices,
+        metadevices={"beacon-meta": metadevice},
+        scanner_list=[proxy],
+        stamp_last_prune=0,
+        redactions={},
+        stamp_redactions_expiry=None,
+        irk_manager=SimpleNamespace(async_prune=lambda: None),
+        _get_device=lambda address: devices.get(address),
+    )
+    coordinator._prune_silent_adverts = lambda now: 0
+
+    BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
+
+    assert proxy in coordinator.devices
+
+
+async def test_scanner_max_radius_survives_a_pruned_proxy():
+    from custom_components.bermuda.number import BermudaScannerMaxRadius
+
+    entity = SimpleNamespace(coordinator=SimpleNamespace(devices={}), address="aa:bb:cc:dd:ee:02")
+    entity.async_write_ha_state = MagicMock()
+    assert BermudaScannerMaxRadius.native_value.fget(entity) is None
+    await BermudaScannerMaxRadius.async_set_native_value(entity, 5.0)
+
+
 def test_scanner_list_del_twice_does_not_raise():
     class _Scanner(SimpleNamespace):
         def __hash__(self):
