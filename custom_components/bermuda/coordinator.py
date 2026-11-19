@@ -160,6 +160,16 @@ def _quota_exempt_sources(metadevice) -> list[str]:
     return metadevice.metadevice_sources
 
 
+def _drop_pruned_adverts(device, prune_set: set[str], nowstamp: float) -> None:
+    """Drop a device's adverts from a pruned device or heard by a pruned scanner (else devices[scanner_address] raises)."""
+    for advert_tuple, advert in list(device.adverts.items()):
+        if advert.device_address in prune_set or advert.scanner_address in prune_set:
+            _LOGGER.debug("Pruning advert %s aged %ds", advert_tuple, nowstamp - advert.stamp)
+            del device.adverts[advert_tuple]
+            if getattr(device, "area_advert", None) is advert:
+                device.area_advert = None
+
+
 class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
     """
     Class to manage fetching data from the Bluetooth component.
@@ -1229,18 +1239,7 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
                 device.metadevice_sources = [a for a in device.metadevice_sources if a not in prune_set]
 
             # clean out the device/scanner advert pairs
-            for advert_tuple in list(device.adverts.keys()):
-                advert = device.adverts[advert_tuple]
-                # A pruned scanner's adverts go too, or a later devices[scanner_address] raises KeyError.
-                if advert.device_address in prune_set or advert.scanner_address in prune_set:
-                    _LOGGER.debug(
-                        "Pruning advert %s aged %ds",
-                        advert_tuple,
-                        nowstamp - advert.stamp,
-                    )
-                    del device.adverts[advert_tuple]
-                    if getattr(device, "area_advert", None) is advert:
-                        device.area_advert = None
+            _drop_pruned_adverts(device, prune_set, nowstamp)
 
         self._prune_silent_adverts(nowstamp)
 
