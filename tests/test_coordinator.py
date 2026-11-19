@@ -355,6 +355,77 @@ def test_prune_devices_tolerates_duplicate_prune_entries(monkeypatch):
     assert fresh_irk in coordinator.devices
 
 
+def test_prune_devices_drops_adverts_heard_by_a_pruned_scanner(monkeypatch):
+    """Adverts whose scanner is pruned go too, and area_advert is cleared, so no devices[] KeyError."""
+    import custom_components.bermuda.coordinator as coordinator_module
+    from custom_components.bermuda.const import BDADDR_TYPE_RANDOM_RESOLVABLE
+
+    monkeypatch.setattr(coordinator_module, "monotonic_time_coarse", lambda: 5000.0)
+
+    gone = "73:ec:0e:56:42:9e"  # a demoted scanner, stale enough to prune
+    tag = "aa:bb:cc:dd:ee:ff"
+    live = "11:22:33:44:55:66"
+
+    class _Dev(SimpleNamespace):
+        def __hash__(self):
+            return hash(self.address)
+
+    advert_kept = SimpleNamespace(device_address=tag, scanner_address=live, stamp=4990.0)
+    advert_gone = SimpleNamespace(device_address=tag, scanner_address=gone, stamp=4990.0)
+    tag_device = _Dev(
+        address=tag,
+        name="tag",
+        last_seen=5000.0,
+        create_sensor=True,
+        is_scanner=False,
+        address_type=BDADDR_TYPE_RANDOM_RESOLVABLE,
+        metadevice_sources=[],
+        adverts={(tag, live): advert_kept, (tag, gone): advert_gone},
+        area_advert=advert_gone,
+    )
+    gone_device = _Dev(
+        address=gone,
+        name="old proxy",
+        last_seen=0,
+        create_sensor=False,
+        is_scanner=False,
+        address_type=BDADDR_TYPE_RANDOM_RESOLVABLE,
+        metadevice_sources=[],
+        adverts={},
+    )
+    devices = {tag: tag_device, gone: gone_device}
+    coordinator = SimpleNamespace(
+        devices=devices,
+        metadevices={},
+        scanner_list=[],
+        stamp_last_prune=0,
+        redactions={},
+        stamp_redactions_expiry=None,
+        irk_manager=SimpleNamespace(async_prune=lambda: None),
+        _get_device=lambda address: devices.get(address),
+    )
+    coordinator._prune_silent_adverts = lambda now: 0
+
+    BermudaDataUpdateCoordinator.prune_devices(coordinator, force_pruning=True)
+
+    assert gone not in coordinator.devices
+    assert list(tag_device.adverts.values()) == [advert_kept]
+    assert tag_device.area_advert is None
+
+
+def test_scanner_list_del_twice_does_not_raise():
+    class _Scanner(SimpleNamespace):
+        def __hash__(self):
+            return hash(self.address)
+
+    scanner = _Scanner(address="11:22:33:44:55:66")
+    coordinator = SimpleNamespace(_scanner_list={scanner.address}, _scanners={scanner}, hass=MagicMock())
+    with patch("custom_components.bermuda.coordinator.async_dispatcher_send"):
+        BermudaDataUpdateCoordinator.scanner_list_del(coordinator, scanner)
+        BermudaDataUpdateCoordinator.scanner_list_del(coordinator, scanner)
+    assert coordinator._scanner_list == set()
+
+
 def test_prune_silent_adverts_drops_only_long_dead_ones():
     """Adverts that timed out, hold no history and have not been heard for
     PRUNE_TIME_ADVERT are dropped - from the source device and from the

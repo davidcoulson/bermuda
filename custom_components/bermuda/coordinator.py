@@ -516,8 +516,9 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
         async_dispatcher_send(self.hass, SIGNAL_SCANNERS_CHANGED)
 
     def scanner_list_del(self, scanner_device: BermudaDevice):
-        self._scanner_list.remove(scanner_device.address)
-        self._scanners.remove(scanner_device)
+        # discard: a scanner that was never fully added can still be purged
+        self._scanner_list.discard(scanner_device.address)
+        self._scanners.discard(scanner_device)
         async_dispatcher_send(self.hass, SIGNAL_SCANNERS_CHANGED)
 
     def get_manufacturer_from_id(self, uuid: int | str) -> tuple[str, bool] | tuple[None, None]:
@@ -1229,13 +1230,17 @@ class BermudaDataUpdateCoordinator(DataUpdateCoordinator):
 
             # clean out the device/scanner advert pairs
             for advert_tuple in list(device.adverts.keys()):
-                if device.adverts[advert_tuple].device_address in prune_set:
+                advert = device.adverts[advert_tuple]
+                # A pruned scanner's adverts go too, or a later devices[scanner_address] raises KeyError.
+                if advert.device_address in prune_set or advert.scanner_address in prune_set:
                     _LOGGER.debug(
-                        "Pruning metadevice advert %s aged %ds",
+                        "Pruning advert %s aged %ds",
                         advert_tuple,
-                        nowstamp - device.adverts[advert_tuple].stamp,
+                        nowstamp - advert.stamp,
                     )
                     del device.adverts[advert_tuple]
+                    if getattr(device, "area_advert", None) is advert:
+                        device.area_advert = None
 
         self._prune_silent_adverts(nowstamp)
 
