@@ -161,7 +161,7 @@ def _quota_exempt_sources(metadevice) -> list[str]:
 
 
 def _drop_pruned_adverts(device, prune_set: set[str], nowstamp: float) -> None:
-    """Drop a device's adverts from a pruned device or heard by a pruned scanner (else devices[scanner_address] raises)."""
+    """Drop adverts from a pruned device or heard by a pruned scanner (else devices[scanner_address] raises)."""
     for advert_tuple, advert in list(device.adverts.items()):
         if advert.device_address in prune_set or advert.scanner_address in prune_set:
             _LOGGER.debug("Pruning advert %s aged %ds", advert_tuple, nowstamp - advert.stamp)
