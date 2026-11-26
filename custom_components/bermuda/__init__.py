@@ -73,7 +73,10 @@ def _register_reload_code(hass: HomeAssistant) -> None:
     """Dev: bermuda.reload_code loads the Python files from disk without a restart."""
 
     async def _reload_code(call: ServiceCall) -> None:
-        entries = hass.config_entries.async_entries(DOMAIN)
+        # Disabled and ignored entries are never set up, so they are not ours to reload.
+        entries = hass.config_entries.async_entries(
+            DOMAIN, include_ignore=False, include_disabled=False
+        )
         for entry in entries:
             if not await hass.config_entries.async_unload(entry.entry_id):
                 raise HomeAssistantError(f"{DOMAIN} did not unload; restart Home Assistant instead")
