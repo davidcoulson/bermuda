@@ -73,6 +73,16 @@ def _register_reload_code(hass: HomeAssistant) -> None:
     """Dev: bermuda.reload_code loads the Python files from disk without a restart."""
 
     async def _reload_code(call: ServiceCall) -> None:
+        # A second call during the first one's awaits would evict the caches again and race the setup.
+        if hass.data.get("bermuda_reloading"):
+            raise HomeAssistantError(f"{DOMAIN} is already reloading its code")
+        hass.data["bermuda_reloading"] = True
+        try:
+            await _reload_code_once()
+        finally:
+            hass.data.pop("bermuda_reloading", None)
+
+    async def _reload_code_once() -> None:
         # Disabled and ignored entries are never set up, so they are not ours to reload.
         entries = hass.config_entries.async_entries(
             DOMAIN, include_ignore=False, include_disabled=False

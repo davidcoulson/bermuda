@@ -5,6 +5,7 @@ from __future__ import annotations
 import sys
 from unittest.mock import patch
 
+from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 
 # from homeassistant.exceptions import ConfigEntryNotReady
@@ -65,6 +66,7 @@ async def test_setup_entry_exception(hass, error_on_get_data):
 async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_data, setup_bermuda_entry: MockConfigEntry):
     """bermuda.reload_code re-imports the package and sets the entry up again."""
     old = {n: m for n, m in sys.modules.items() if n.startswith("custom_components.bermuda")}
+    old_flow = config_entries.HANDLERS[DOMAIN]
 
     class _EmptyYaml:
         """Stands in for the manufacturer yaml files, which the test config dir does not have."""
@@ -96,3 +98,4 @@ async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_
             del sys.modules[name]
         sys.modules.update(old)
         sys.modules["custom_components"].bermuda = old["custom_components.bermuda"]
+        config_entries.HANDLERS[DOMAIN] = old_flow  # the re-import registered its own flow class
