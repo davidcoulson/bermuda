@@ -133,3 +133,10 @@ bind_tile_address:
       example: "31:91:5D:22:1E:DA"
       selector:
         text:
+
+reload_code:
+  name: Reload code
+  description: >-
+    For development. Unloads Bermuda, imports its Python files from disk again
+    and sets it up, so a code change takes effect without restarting Home
+    Assistant. Config flow and manifest changes still need a restart.
