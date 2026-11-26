@@ -18,7 +18,6 @@ from homeassistant.helpers import config_validation as cv
 from homeassistant.helpers.entity_registry import async_migrate_entries
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
-from homeassistant.loader import async_get_integration
 
 from .const import (
     _LOGGER,
@@ -50,6 +49,18 @@ class BermudaData:
 
 
 CONFIG_SCHEMA = cv.config_entry_only_config_schema(DOMAIN)
+
+
+def _import_code(package: str, platforms) -> None:
+    """Import the package and its platforms; runs in the import executor.
+
+    After an unload Home Assistant still lists "<domain>.<platform>" as loaded,
+    so it would import the new platform modules in the event loop (and warn);
+    once they are in sys.modules its own import is a cache hit.
+    """
+    importlib.import_module(package)
+    for platform in platforms:
+        importlib.import_module(f"{package}.{platform}")
 
 
 def _forget_code(hass: HomeAssistant, package: str, domain: str) -> None:
@@ -93,7 +104,7 @@ def _register_reload_code(hass: HomeAssistant) -> None:
         _forget_code(hass, __name__, DOMAIN)
         try:
             # Bermuda has no async_setup: importing is the check for a syntax error.
-            await (await async_get_integration(hass, DOMAIN)).async_get_component()
+            await hass.async_add_import_executor_job(_import_code, __name__, PLATFORMS)
         except Exception as err:
             # This handler stays registered, so the action works again once the code is fixed.
             raise HomeAssistantError(
