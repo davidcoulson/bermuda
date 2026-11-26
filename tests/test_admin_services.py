@@ -18,6 +18,7 @@ CALLS = {
     "bind_tile": {"tile_id": "tile_x", "tile_uid": "00"},
     "bind_tile_address": {"tile_id": "tile_x", "address": "aa:bb:cc:dd:ee:ff"},
     "dump_devices": {},
+    "reload_code": {},
 }
 
 
@@ -25,7 +26,7 @@ async def test_every_service_is_registered(hass: HomeAssistant, setup_bermuda_en
     assert set(hass.services.async_services_for_domain(DOMAIN)) == set(CALLS)
 
 
-@pytest.mark.parametrize("service", sorted(CALLS))
+@pytest.mark.parametrize("service", sorted(set(CALLS) - {"reload_code"}))
 async def test_non_admin_user_is_refused(
     hass: HomeAssistant, setup_bermuda_entry: MockConfigEntry, hass_read_only_user, service: str
 ):
@@ -48,3 +49,10 @@ async def test_admin_and_automation_calls_still_work(
             DOMAIN, "list_device_candidates", {}, blocking=True, return_response=True, context=context
         )
         assert isinstance(result, dict)
+
+
+async def test_reload_code_is_admin_only(hass: HomeAssistant, setup_bermuda_entry: MockConfigEntry, hass_read_only_user):
+    with pytest.raises(Unauthorized):
+        await hass.services.async_call(
+            DOMAIN, "reload_code", {}, blocking=True, context=Context(user_id=hass_read_only_user.id)
+        )

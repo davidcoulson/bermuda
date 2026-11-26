@@ -2,6 +2,10 @@
 
 from __future__ import annotations
 
+import sys
+from unittest.mock import patch
+
+from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
 
 # from homeassistant.exceptions import ConfigEntryNotReady
@@ -57,3 +61,41 @@ async def test_setup_entry_exception(hass, error_on_get_data):
     # anything will "catch" our over-ridded async_refresh's exception.
     #  with pytest.raises(ConfigEntryNotReady):
     #     assert await async_setup_entry(hass, config_entry)
+
+
+async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_data, setup_bermuda_entry: MockConfigEntry):
+    """bermuda.reload_code re-imports the package and sets the entry up again."""
+    old = {n: m for n, m in sys.modules.items() if n.startswith("custom_components.bermuda")}
+    old_flow = config_entries.HANDLERS[DOMAIN]
+
+    class _EmptyYaml:
+        """Stands in for the manufacturer yaml files, which the test config dir does not have."""
+
+        async def __aenter__(self):
+            return self
+
+        async def __aexit__(self, *exc):
+            return False
+
+        async def read(self):
+            return '{"uuids": [], "company_identifiers": []}'
+
+    try:
+        # The conftest patches name the old module objects, so they do not cover the re-imported ones.
+        with patch("aiofiles.open", return_value=_EmptyYaml()):
+            await hass.services.async_call(DOMAIN, "reload_code", {}, blocking=True)
+            await hass.async_block_till_done()
+        assert setup_bermuda_entry.state == ConfigEntryState.LOADED
+        assert sys.modules["custom_components.bermuda"] is not old["custom_components.bermuda"]
+        coordinator_module = sys.modules["custom_components.bermuda.coordinator"]
+        assert coordinator_module is not old["custom_components.bermuda.coordinator"]
+        assert type(setup_bermuda_entry.runtime_data.coordinator) is coordinator_module.BermudaDataUpdateCoordinator
+        assert hass.services.has_service(DOMAIN, "reload_code")
+        assert hass.services.has_service(DOMAIN, "dump_devices")
+    finally:
+        # Later tests patch by module path, so put the original modules back.
+        for name in [n for n in sys.modules if n.startswith("custom_components.bermuda")]:
+            del sys.modules[name]
+        sys.modules.update(old)
+        sys.modules["custom_components"].bermuda = old["custom_components.bermuda"]
+        config_entries.HANDLERS[DOMAIN] = old_flow  # the re-import registered its own flow class
