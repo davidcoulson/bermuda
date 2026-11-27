@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 from homeassistant.core import ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_registry import async_migrate_entries
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
@@ -117,8 +118,19 @@ def _register_reload_code(hass: HomeAssistant) -> None:
         failed = [e.title for e in entries if not await hass.config_entries.async_setup(e.entry_id)]
         if failed:
             raise HomeAssistantError(f"{DOMAIN} did not set up again for {failed}; see the log")
+        _clear_marketplace_restart(hass)
 
     async_register_admin_service(hass, DOMAIN, "reload_code", _reload_code)
+
+
+def _clear_marketplace_restart(hass) -> None:
+    """Drop Marketplace's "restart to finish the update" repairs for Bermuda.
+
+    Marketplace cannot see reload_code, so they would stay until a restart.
+    """
+    for (domain, issue_id), issue in list(ir.async_get(hass).issues.items()):
+        if domain == "marketplace" and issue_id.startswith("restart_required_") and issue.issue_domain == DOMAIN:
+            ir.async_delete_issue(hass, domain, issue_id)
 
 
 async def async_setup_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> bool:

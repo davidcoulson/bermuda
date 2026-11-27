@@ -7,6 +7,7 @@ from unittest.mock import patch
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 
 # from homeassistant.exceptions import ConfigEntryNotReady
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -99,3 +100,22 @@ async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_
         sys.modules.update(old)
         sys.modules["custom_components"].bermuda = old["custom_components.bermuda"]
         config_entries.HANDLERS[DOMAIN] = old_flow  # the re-import registered its own flow class
+
+
+async def test_reload_clears_only_marketplaces_bermuda_restart_repairs(hass: HomeAssistant):
+    for domain, issue_id, issue_domain in (
+        ("marketplace", "restart_required_1_tags/2026.11.27.2", "bermuda"),
+        ("marketplace", "restart_required_2_tags/2026.11.26.01", "ssh"),
+        ("marketplace", "critical_x", "bermuda"),
+        ("bermuda", "restart_required_x", "bermuda"),
+    ):
+        ir.async_create_issue(
+            hass, domain, issue_id, is_fixable=False, issue_domain=issue_domain,
+            severity=ir.IssueSeverity.WARNING, translation_key="x",
+        )
+    sys.modules["custom_components.bermuda"]._clear_marketplace_restart(hass)
+    assert set(ir.async_get(hass).issues) == {
+        ("marketplace", "restart_required_2_tags/2026.11.26.01"),
+        ("marketplace", "critical_x"),
+        ("bermuda", "restart_required_x"),
+    }
