@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from homeassistant import config_entries
@@ -102,20 +104,31 @@ async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_
         config_entries.HANDLERS[DOMAIN] = old_flow  # the re-import registered its own flow class
 
 
-async def test_reload_clears_only_marketplaces_bermuda_restart_repairs(hass: HomeAssistant):
+async def test_reload_clears_only_marketplaces_running_version_repairs(hass, monkeypatch):
+    mod = sys.modules["custom_components.bermuda"]
+    monkeypatch.setattr(mod, "_CODE_VERSION", "1.2.3")
     for domain, issue_id, issue_domain in (
-        ("marketplace", "restart_required_1_tags/2026.11.27.2", "bermuda"),
-        ("marketplace", "restart_required_2_tags/2026.11.26.01", "ssh"),
-        ("marketplace", "critical_x", "bermuda"),
-        ("bermuda", "restart_required_x", "bermuda"),
+        ("marketplace", "restart_required_1_tags/1.2.3", "bermuda"),
+        ("marketplace", "restart_required_2_tags/v1.2.3", "bermuda"),
+        ("marketplace", "restart_required_3_tags/1.2.4", "bermuda"),
+        ("marketplace", "restart_required_4_tags/1.2.3", "ssh"),
+        ("marketplace", "critical_x/1.2.3", "bermuda"),
+        ("bermuda", "restart_required_x/1.2.3", "bermuda"),
     ):
         ir.async_create_issue(
             hass, domain, issue_id, is_fixable=False, issue_domain=issue_domain,
             severity=ir.IssueSeverity.WARNING, translation_key="x",
         )
-    sys.modules["custom_components.bermuda"]._clear_marketplace_restart(hass)
+    mod._clear_marketplace_restart(hass)
     assert set(ir.async_get(hass).issues) == {
-        ("marketplace", "restart_required_2_tags/2026.11.26.01"),
-        ("marketplace", "critical_x"),
-        ("bermuda", "restart_required_x"),
+        ("marketplace", "restart_required_3_tags/1.2.4"),
+        ("marketplace", "restart_required_4_tags/1.2.3"),
+        ("marketplace", "critical_x/1.2.3"),
+        ("bermuda", "restart_required_x/1.2.3"),
     }
+
+
+def test_code_version_is_the_manifest_version():
+    mod = sys.modules["custom_components.bermuda"]
+    manifest = json.loads((Path(mod.__file__).parent / "manifest.json").read_text())
+    assert mod._CODE_VERSION == manifest["version"]
