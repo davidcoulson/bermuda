@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+import json
 import sys
+from pathlib import Path
 from unittest.mock import patch
 
 from homeassistant import config_entries
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import issue_registry as ir
 
 # from homeassistant.exceptions import ConfigEntryNotReady
 from pytest_homeassistant_custom_component.common import MockConfigEntry
@@ -99,3 +102,33 @@ async def test_reload_code_replaces_the_modules(hass: HomeAssistant, bypass_get_
         sys.modules.update(old)
         sys.modules["custom_components"].bermuda = old["custom_components.bermuda"]
         config_entries.HANDLERS[DOMAIN] = old_flow  # the re-import registered its own flow class
+
+
+async def test_reload_clears_only_marketplaces_running_version_repairs(hass, monkeypatch):
+    mod = sys.modules["custom_components.bermuda"]
+    monkeypatch.setattr(mod, "_CODE_VERSION", "1.2.3")
+    for domain, issue_id, issue_domain in (
+        ("marketplace", "restart_required_1_tags/1.2.3", "bermuda"),
+        ("marketplace", "restart_required_2_tags/v1.2.3", "bermuda"),
+        ("marketplace", "restart_required_3_tags/1.2.4", "bermuda"),
+        ("marketplace", "restart_required_4_tags/1.2.3", "ssh"),
+        ("marketplace", "critical_x/1.2.3", "bermuda"),
+        ("bermuda", "restart_required_x/1.2.3", "bermuda"),
+    ):
+        ir.async_create_issue(
+            hass, domain, issue_id, is_fixable=False, issue_domain=issue_domain,
+            severity=ir.IssueSeverity.WARNING, translation_key="x",
+        )
+    mod._clear_marketplace_restart(hass)
+    assert set(ir.async_get(hass).issues) == {
+        ("marketplace", "restart_required_3_tags/1.2.4"),
+        ("marketplace", "restart_required_4_tags/1.2.3"),
+        ("marketplace", "critical_x/1.2.3"),
+        ("bermuda", "restart_required_x/1.2.3"),
+    }
+
+
+def test_code_version_is_the_manifest_version():
+    mod = sys.modules["custom_components.bermuda"]
+    manifest = json.loads((Path(mod.__file__).parent / "manifest.json").read_text())
+    assert mod._CODE_VERSION == manifest["version"]

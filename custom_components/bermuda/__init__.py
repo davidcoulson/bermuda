@@ -9,13 +9,16 @@ from __future__ import annotations
 
 import importlib
 import importlib.util
+import json
 import sys
 from dataclasses import dataclass
+from pathlib import Path
 from typing import TYPE_CHECKING
 
 from homeassistant.core import ServiceCall, callback
 from homeassistant.exceptions import ConfigEntryNotReady, HomeAssistantError
 from homeassistant.helpers import config_validation as cv
+from homeassistant.helpers import issue_registry as ir
 from homeassistant.helpers.entity_registry import async_migrate_entries
 from homeassistant.helpers.service import async_register_admin_service
 from homeassistant.helpers.storage import Store
@@ -121,6 +124,25 @@ def _register_reload_code(hass: HomeAssistant) -> None:
     async_register_admin_service(hass, DOMAIN, "reload_code", _reload_code)
 
 
+_CODE_VERSION = json.loads((Path(__file__).parent / "manifest.json").read_text())["version"]
+
+
+def _clear_marketplace_restart(hass) -> None:
+    """Drop Marketplace's "restart to finish the update" repair for the running Bermuda version.
+
+    Called from entry setup, so it uses the new code's version even when the old handler did
+    the reload; a repair for any other version still waits.
+    """
+    for (domain, issue_id), issue in list(ir.async_get(hass).issues.items()):
+        if (
+            domain == "marketplace"
+            and issue_id.startswith("restart_required_")
+            and issue.issue_domain == DOMAIN
+            and issue_id.rsplit("/", 1)[-1].removeprefix("v") == _CODE_VERSION
+        ):
+            ir.async_delete_issue(hass, domain, issue_id)
+
+
 async def async_setup_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> bool:
     """Set up this integration using UI."""
     _register_reload_code(hass)
@@ -153,6 +175,7 @@ async def async_setup_entry(hass: HomeAssistant, entry: BermudaConfigEntry) -> b
 
     entry.async_on_unload(entry.add_update_listener(async_reload_entry))
 
+    _clear_marketplace_restart(hass)
     return True
 
 
